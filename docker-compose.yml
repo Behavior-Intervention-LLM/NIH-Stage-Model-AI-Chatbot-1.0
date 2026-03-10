@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data   # persist vector store across restarts
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # Point the frontend at the backend service by name
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
