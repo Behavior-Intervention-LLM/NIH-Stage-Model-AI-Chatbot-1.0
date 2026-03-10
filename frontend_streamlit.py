@@ -1,6 +1,7 @@
 """NIH Stage Model AI Chatbot - Streamlit Frontend"""
 import io
 import importlib
+import importlib.util
 import uuid
 from datetime import datetime
 
@@ -79,7 +80,7 @@ def human_title(title: str) -> str:
 
 
 def _extract_text_from_pdf(file_bytes: bytes) -> str:
-    py_pdf2 = importlib.util.find_spec("PyPDF2")
+    py_pdf2 = importlib.util.find_spec("PyPDF2") # type: ignore
     if py_pdf2 is None:
         return ""
     PyPDF2 = importlib.import_module("PyPDF2")
