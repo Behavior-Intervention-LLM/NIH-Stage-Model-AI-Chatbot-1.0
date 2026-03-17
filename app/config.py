@@ -14,21 +14,29 @@ class Settings(BaseSettings):
     API_VERSION: str = "1.0.0"
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
     
+<<<<<<< HEAD
     # LLM configuration
     # LLM_PROVIDER: "ollama" (local) | "anthropic" | "openai"
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
+=======
+    # LLM configuration（ Ollama + ）
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")  # ollama
+>>>>>>> 9bf1842 (initial commit)
     LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:3b-instruct")
     LLM_API_KEY: Optional[str] = os.getenv("LLM_API_KEY")
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 2000
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+<<<<<<< HEAD
     # Anthropic-specific
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
     ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
     # OpenAI-specific
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     OPENAI_BASE_URL: Optional[str] = os.getenv("OPENAI_BASE_URL")
+=======
+>>>>>>> 9bf1842 (initial commit)
     
     # Memory configuration
     SHORT_TERM_LIMIT: int = 20

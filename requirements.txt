@@ -3,7 +3,10 @@ uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
+<<<<<<< HEAD
 anthropic>=0.25.0
+=======
+>>>>>>> 9bf1842 (initial commit)
 
 # 
 PyPDF2>=3.0.0
