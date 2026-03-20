@@ -2,10 +2,20 @@
 import io
 import importlib
 import importlib.util
+import os
 import uuid
 from datetime import datetime
 
 import streamlit as st
+
+# Inject Streamlit secrets into environment variables before importing app modules.
+# Required for Streamlit Cloud: secrets are not automatically available as os.environ.
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
 
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
@@ -23,6 +33,31 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _require_auth():
+    """Block access until a valid password is entered.
+    If APP_PASSWORD is not configured, access is open (local dev mode)."""
+    expected = st.secrets.get("APP_PASSWORD", os.environ.get("APP_PASSWORD", ""))
+    if not expected:
+        # No password set — open access (local development)
+        return
+    if st.session_state.get("authenticated"):
+        return
+
+    st.title("🔬 NIH Stage Model AI Chatbot")
+    st.markdown("This tool is for authorized users only. Enter the access password to continue.")
+    pw = st.text_input("Password", type="password", key="_auth_pw")
+    if st.button("Login", type="primary"):
+        if pw == expected:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
+
+
+_require_auth()
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())

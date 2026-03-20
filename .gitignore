@@ -37,6 +37,9 @@ NIH_LLM/
 .env
 .env.local
 
+# Streamlit secrets (contains API keys — never commit)
+.streamlit/secrets.toml
+
 # Logs
 *.log
 logs/

@@ -20,7 +20,7 @@ class LLMClient:
         self.ollama_base_url = settings.OLLAMA_BASE_URL.rstrip("/")
 
     def is_enabled(self) -> bool:
-        return self.provider in {"ollama", "anthropic", "openai"}
+        return self.provider in {"ollama", "anthropic", "openai", "groq"}
 
     def chat_text(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         if not self.is_enabled():
@@ -34,6 +34,9 @@ class LLMClient:
 
         if self.provider == "openai":
             return self._call_openai(system_prompt, user_prompt)
+
+        if self.provider == "groq":
+            return self._call_groq(system_prompt, user_prompt)
 
         return None
 
@@ -96,6 +99,33 @@ class LLMClient:
         }
         response = requests.post(
             f"{base_url}/chat/completions",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+    def _call_groq(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        api_key = settings.GROQ_API_KEY
+        if not api_key:
+            raise ValueError("GROQ_API_KEY is not set.")
+        model = settings.GROQ_MODEL
+        payload = {
+            "model": model,
+            "temperature": settings.LLM_TEMPERATURE,
+            "max_tokens": settings.LLM_MAX_TOKENS,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
             json=payload,
             headers={
                 "Authorization": f"Bearer {api_key}",

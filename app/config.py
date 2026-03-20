@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # OpenAI-specific
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     OPENAI_BASE_URL: Optional[str] = os.getenv("OPENAI_BASE_URL")
+    # Groq-specific (OpenAI-compatible, free tier)
+    GROQ_API_KEY: Optional[str] = os.getenv("GROQ_API_KEY")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     
     # Memory configuration
     SHORT_TERM_LIMIT: int = 20
