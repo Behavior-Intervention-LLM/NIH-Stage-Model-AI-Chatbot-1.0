@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: nih-vllm
+    gpus: all
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    command: >
+      --model ${VLLM_MODEL}
+      --served-model-name ${VLLM_SERVED_MODEL_NAME}
+      --host 0.0.0.0
+      --port 8001
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-4096}
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+    ports:
+      - "8001:8001"
+    volumes:
+      - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${LOCAL_MODEL_DIR:-./models}:/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/v1/models"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: nih-fastapi
+    depends_on:
+      vllm:
+        condition: service_healthy
+    environment:
+      - DEBUG=${DEBUG:-False}
+      - LLM_MODEL=${VLLM_SERVED_MODEL_NAME}
+      - VLLM_BASE_URL=http://vllm:8001/v1
+      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-120}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.3}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2000}
+      - VECTOR_STORE_PATH=${VECTOR_STORE_PATH:-data/vector_store}
+      - DOCUMENTS_DIR=${DOCUMENTS_DIR:-data/documents}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data

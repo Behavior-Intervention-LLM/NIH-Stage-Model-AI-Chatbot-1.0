@@ -59,5 +59,5 @@ Return JSON only:
 ## Rules
 - If confidence is low, recommend tool lookup.
 - Extract useful feature updates for downstream agents.
-- If confidence < 0.75, or you think your evidence is not full, fill `miss_info` with missing critical fields. At the same time, if confidence < 0.5, you should make `stage` to be none, meaning you don't know.
+- If confidence < 0.75, or you think your evidence is not full, fill `miss_info` with missing critical fields. At the same time, if confidence < 0.5, you should make `stage` to be none, meaning you don't know. But always show how you reasoning.
 - `miss_info` should focus on study design, sample size, mechanism/efficacy evidence, and settings. Each information that make you not confident during the tree reasoning is a miss_info.

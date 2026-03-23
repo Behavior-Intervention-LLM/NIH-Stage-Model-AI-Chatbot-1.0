@@ -660,15 +660,14 @@ class Orchestrator:
                     "Is this a pilot/feasibility study, an efficacy RCT, or a real-world effectiveness study?"
                 )
 
-            reply_lines = [
-                "I do not yet have enough information to determine the NIH Stage accurately.",
-                "At this point, assigning a specific stage would be overconfident.",
-                "Please provide the following key information:",
-            ]
-            for i, item in enumerate(missing_info[:4], 1):
-                reply_lines.append(f"{i}. {item}")
-            reply_lines.append(f"Most important follow-up: {clarifying_question}")
-            reply = "\\n".join(reply_lines)
+            # Do not hardcode final reply text here.
+            # Pass clarify-only constraints into responder so output stays prompt+model driven.
+            state.slots.extracted_features["clarify_only_mode"] = True
+            state.slots.extracted_features["clarify_only_reason"] = (
+                "stage is null or stage confidence < 0.75"
+            )
+            state.slots.extracted_features["missing_info"] = missing_info
+            state.slots.extracted_features["clarifying_question"] = clarifying_question
 
             self._trace(
                 gstate,
@@ -687,8 +686,14 @@ class Orchestrator:
                     "route_notes": "hard gate: clarify-only mode (no free stage guess)",
                 }
             )
-            return {**gstate, "state": state, "reply": reply}
+            out = self.agents["responder_agent"].run(state, user_message, context)
+            self.agents["responder_agent"].update_state(state, out)
+            self._add_agent(gstate, "responder_agent", out)
+            reply = out.user_facing if out and out.user_facing else "Please provide more study details so I can classify stage accurately."
+            return {**gstate, "state": state, "last_output": out, "reply": reply}
 
+        state.slots.extracted_features["clarify_only_mode"] = False
+        state.slots.extracted_features.pop("clarify_only_reason", None)
         out = self.agents["responder_agent"].run(state, user_message, context)
         self.agents["responder_agent"].update_state(state, out)
         self._add_agent(gstate, "responder_agent", out)

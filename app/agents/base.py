@@ -19,7 +19,7 @@ class BaseAgent(ABC):
         Args:
             state: 
             user_message: 
-            context: （ MemoryManager ）
+            context: (MemoryManager)
         
         Returns:
             AgentOutput: Agent 

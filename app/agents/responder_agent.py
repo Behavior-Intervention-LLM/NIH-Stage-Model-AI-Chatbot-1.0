@@ -2,6 +2,7 @@
 Responder Agent: execute plan and generate final user-facing response.
 """
 import re
+from pathlib import Path
 from typing import List
 
 from app.agents.base import BaseAgent
@@ -23,6 +24,23 @@ class ResponderAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("ResponderAgent")
+        self._prompt_file = Path(__file__).resolve().parents[1] / "prompts" / "responder.md"
+        self._fallback_system_prompt = (
+            "You are an NIH Stage Model assistant.\n"
+            "Generate a clear user-facing answer grounded in available evidence.\n"
+            "If information is insufficient for confident stage assignment, do not force a stage;\n"
+            "state uncertainty and ask targeted follow-up questions."
+        )
+
+    def _get_system_prompt(self) -> str:
+        try:
+            if self._prompt_file.exists():
+                text = self._prompt_file.read_text(encoding="utf-8").strip()
+                if text:
+                    return text
+        except Exception:
+            pass
+        return self._fallback_system_prompt
 
     @staticmethod
     def _collect_evidence(state: SessionState) -> tuple[List[str], List[str], List]:
@@ -56,6 +74,8 @@ class ResponderAgent(BaseAgent):
 
         evidence_lines, evidence_sources, citations = self._collect_evidence(state)
         rag_active = len(evidence_lines) > 0 or len(evidence_sources) > 0
+        clarify_only_mode = bool(state.slots.extracted_features.get("clarify_only_mode", False))
+        clarify_only_reason = str(state.slots.extracted_features.get("clarify_only_reason", "") or "")
 
         message_lower = user_message.lower().strip()
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
@@ -74,48 +94,34 @@ class ResponderAgent(BaseAgent):
         intent_missing = state.slots.extracted_features.get("intent_missing_info", []) or []
         intent_clarifying = state.slots.extracted_features.get("intent_clarifying_question")
 
+        system_prompt = self._get_system_prompt()
+        mode = "normal"
         if is_stage_definition_query:
-            system_prompt = (
-                "You are an NIH Stage Model explainer. "
-                "Answer only the current definition/list question. "
-                "Do not include prior case details or stage-classification follow-ups. "
-                "If retrieval evidence is available, prioritize the newest/revised source and mention it explicitly."
-            )
-            user_prompt = (
-                f"Question: {user_message}\n"
-                f"Knowledge sources: {evidence_sources}\n"
-                f"Evidence snippets: {evidence_lines}\n"
-                "Provide: (1) number of stages, (2) stage names, and (3) one-line description per stage."
-            )
-            text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
-        else:
-            system_prompt = (
-                "You are an NIH Stage Model assistant.\n"
-                "Rules:\n"
-                "1) Answer the user's current question directly.\n"
-                "2) If stage is known, explicitly write Stage 0 / Stage I / Stage II / Stage III / Stage IV / Stage V.\n"
-                "3) Include a short reasoning summary.\n"
-                "4) If information is missing, list missing items and ask a follow-up question.\n"
-                "5) If evidence exists, explicitly include 'Based on knowledge sources: ...'.\n"
-                "6) Provide a detailed but concise response in 2-4 short paragraphs."
-            )
-            user_prompt = (
-                f"Question: {user_message}\n"
-                f"Slots: {state.slots.model_dump()}\n"
-                f"Intent payload: {intent_payload}\n"
-                f"Planner outline: {planner_outline}\n"
-                f"Next question: {next_question}\n"
-                f"Stage reasoning: {stage_reasoning}\n"
-                f"Missing info (stage): {missing_info}\n"
-                f"Missing info (intent): {intent_missing}\n"
-                f"Clarifying question (stage): {clarifying_question}\n"
-                f"Clarifying question (intent): {intent_clarifying}\n"
-                f"RAG active: {rag_active}\n"
-                f"Knowledge sources: {evidence_sources}\n"
-                f"Evidence snippets: {evidence_lines}\n"
-                f"Recent context: {context[:1600]}"
-            )
-            text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
+            mode = "definition"
+        if clarify_only_mode:
+            mode = "stage_clarify"
+
+        user_prompt = (
+            f"Mode: {mode}\n"
+            f"Question: {user_message}\n"
+            f"Slots: {state.slots.model_dump()}\n"
+            f"Intent payload: {intent_payload}\n"
+            f"Planner outline: {planner_outline}\n"
+            f"Next question: {next_question}\n"
+            f"Stage reasoning: {stage_reasoning}\n"
+            f"Missing info (stage): {missing_info}\n"
+            f"Missing info (intent): {intent_missing}\n"
+            f"Clarifying question (stage): {clarifying_question}\n"
+            f"Clarifying question (intent): {intent_clarifying}\n"
+            f"Clarify-only mode: {clarify_only_mode}\n"
+            f"Clarify-only reason: {clarify_only_reason}\n"
+            f"RAG active: {rag_active}\n"
+            f"Knowledge sources: {evidence_sources}\n"
+            f"Evidence snippets: {evidence_lines}\n"
+            f"Recent context: {context[:1600]}\n"
+            "Output plain user-facing answer text only (no JSON)."
+        )
+        text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
 
         if not text:
             return None

@@ -72,6 +72,7 @@ class SessionState(BaseModel):
     session_id: str
     messages: List[Message] = Field(default_factory=list)  #  N （）
     summary: Optional[str] = None  # （）
+    summary_history: List[str] = Field(default_factory=list)  # periodic summary snapshots
     slots: StageSlots = Field(default_factory=StageSlots)
     artifacts: List[Artifact] = Field(default_factory=list)  # tool 
     last_route: Optional[str] = None  #  router （ debug）
