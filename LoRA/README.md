@@ -1,12 +1,12 @@
 # LoRA SFT (Qwen2.5-7B)
 
-## 1) 安装训练依赖
+## 1) Install training dependencies
 
 ```bash
 pip install -r lora/requirements.txt
 ```
 
-## 2) 开始 LoRA SFT 训练
+## 2) Start LoRA SFT training
 
 ```bash
 python lora/train_lora_sft.py \
@@ -19,11 +19,11 @@ python lora/train_lora_sft.py \
   --gradient_accumulation_steps 8
 ```
 
-训练完成后会生成：
-- `metrics.json`（包含 train/eval 指标，含 perplexity）
-- `sample_generations.jsonl`（评估样例生成）
+After training, the script produces:
+- `metrics.json` (includes train/eval metrics and perplexity)
+- `sample_generations.jsonl` (qualitative evaluation generations)
 
-## 3) 单独评估已训练 LoRA
+## 3) Evaluate a trained LoRA adapter only
 
 ```bash
 python lora/evaluate_lora_sft.py \
@@ -33,14 +33,14 @@ python lora/evaluate_lora_sft.py \
   --max_eval_samples 100
 ```
 
-会输出：
+Outputs include:
 - `eval_loss`
 - `perplexity`
-- `stage_match_acc`（基于 `predicted_stage` 的简单精确匹配率）
+- `stage_match_acc` (simple exact-match rate based on `predicted_stage`)
 
-## 4) Mac 注意事项
+## 4) Notes for Mac
 
-- 7B 在 Mac 上可能内存压力大，建议先减小：
+- 7B can be memory-heavy on Mac. Consider:
   - `--max_length 1024`
   - `--gradient_accumulation_steps 16`
-  - 或先用更小基座模型验证流程
+  - or validate the training pipeline with a smaller base model first
