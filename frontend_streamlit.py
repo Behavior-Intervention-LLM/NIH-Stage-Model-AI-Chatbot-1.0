@@ -17,11 +17,14 @@ try:
 except Exception:
     pass
 
+# Enables tool to utilize agents
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
 from app.tools import tool_registry
 
 
+# How is it storing/logging information - do we need to set up a "database"
+# How does streamlit cache-resource work
 @st.cache_resource(show_spinner="Loading AI system...")
 def get_orchestrator():
     orch = Orchestrator(tool_registry=tool_registry)
@@ -34,7 +37,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
+# Access Authentication
 def _require_auth():
     """Block access until a valid password is entered.
     If APP_PASSWORD is not configured, access is open (local dev mode)."""
@@ -59,6 +62,8 @@ def _require_auth():
 
 _require_auth()
 
+
+# What is happening here
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
@@ -83,6 +88,8 @@ if "active_conversation_id" not in st.session_state:
     st.session_state.active_conversation_id = next(iter(st.session_state.conversations.keys()))
 
 
+
+# What is happening here
 def create_new_conversation(title: str = "New Chat") -> str:
     conv_id = str(uuid.uuid4())
     st.session_state.conversations[conv_id] = {
@@ -114,6 +121,7 @@ def human_title(title: str) -> str:
     return title if title and title.strip() else "Untitled Chat"
 
 
+# Extracting PDF
 def _extract_text_from_pdf(file_bytes: bytes) -> str:
     py_pdf2 = importlib.util.find_spec("PyPDF2") # type: ignore
     if py_pdf2 is None:
@@ -131,6 +139,7 @@ def _extract_text_from_pdf(file_bytes: bytes) -> str:
         return ""
 
 
+# Extracting DOCX
 def _extract_text_from_docx(file_bytes: bytes) -> str:
     docx_spec = importlib.util.find_spec("docx")
     if docx_spec is None:
@@ -144,6 +153,7 @@ def _extract_text_from_docx(file_bytes: bytes) -> str:
         return ""
 
 
+# Extracting TXT
 def _extract_text_from_txt(file_bytes: bytes) -> str:
     for enc in ("utf-8", "utf-16", "latin-1"):
         try:
@@ -171,6 +181,7 @@ def _extract_text_from_image(file_bytes: bytes) -> tuple[str, str]:
         return "", "Image OCR completed but no text found."
     except Exception:
         return "", "Image OCR failed."
+
 
 
 def parse_uploaded_files(uploaded_files) -> tuple[str, list[str]]:
@@ -207,6 +218,7 @@ def parse_uploaded_files(uploaded_files) -> tuple[str, list[str]]:
     return merged[:12000], parse_logs
 
 
+# What is happening here
 def check_backend_health() -> bool:
     try:
         get_orchestrator()
