@@ -17,7 +17,6 @@ source venv/bin/activate
 # 
 echo "..."
 pip install -q -r requirements.txt
-pip install -q streamlit requests
 
 # 
 if curl -s http://localhost:8000/health > /dev/null 2>&1; then

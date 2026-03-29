@@ -41,7 +41,8 @@ st.set_page_config(
 def _require_auth():
     """Block access until a valid password is entered.
     If APP_PASSWORD is not configured, access is open (local dev mode)."""
-    expected = st.secrets.get("APP_PASSWORD", os.environ.get("APP_PASSWORD", ""))
+    # expected = st.secrets.get("APP_PASSWORD", os.environ.get("APP_PASSWORD", ""))
+    expected = "password"
     if not expected:
         # No password set — open access (local development)
         return
@@ -60,10 +61,12 @@ def _require_auth():
     st.stop()
 
 
-_require_auth()
+# _require_auth()
 
 
 # What is happening here
+
+# How might sessions state help with the overall program
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
