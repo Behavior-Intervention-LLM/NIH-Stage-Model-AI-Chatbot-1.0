@@ -302,46 +302,46 @@ def render_thinking_trace(debug_info: dict):
     html = "<br/>".join(line.replace("<", "&lt;").replace(">", "&gt;") for line in lines)
     st.markdown(
         f"""
-<div style="
-  background: #f6f7f8;
-  border: 1px solid #e6e8eb;
-  border-radius: 8px;
-  padding: 10px 12px;
-  color: #6b7280;
-  font-size: 12px;
-  line-height: 1.45;">
-  <div style="font-weight: 600; color: #9ca3af; margin-bottom: 6px;">Thinking Trace</div>
-  {html}
-</div>
-""",
+            <div style="
+            background: #f6f7f8;
+            border: 1px solid #e6e8eb;
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #6b7280;
+            font-size: 12px;
+            line-height: 1.45;">
+            <div style="font-weight: 600; color: #9ca3af; margin-bottom: 6px;">Thinking Trace</div>
+            {html}
+            </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
-def render_workflow_cards():
-    st.markdown("### Guided Workflows")
-    st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
+# def render_workflow_cards():
+#     st.markdown("### Guided Workflows")
+#     st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
 
-    options = [
-        ("auto", "🧠 Auto", "Intent-driven routing"),
-        ("mechanism_coach", "🧬 Mechanism Coach", "Mechanism ranking + validation"),
-        ("study_builder", "🧱 Study Builder", "Stage-specific design matrix"),
-        ("grant_partner", "📝 Grant Partner", "Specific aims + reviewer critique"),
-        ("measure_finder", "📏 Measure Finder", "Construct-to-measure shortlist"),
-    ]
+#     options = [
+#         ("auto", "🧠 Auto", "Intent-driven routing"),
+#         ("mechanism_coach", "🧬 Mechanism Coach", "Mechanism ranking + validation"),
+#         ("study_builder", "🧱 Study Builder", "Stage-specific design matrix"),
+#         ("grant_partner", "📝 Grant Partner", "Specific aims + reviewer critique"),
+#         ("measure_finder", "📏 Measure Finder", "Construct-to-measure shortlist"),
+#     ]
 
-    cols = st.columns(len(options))
-    for col, (value, title, subtitle) in zip(cols, options):
-        with col:
-            is_active = st.session_state.selected_workflow == value
-            if is_active:
-                st.markdown("`Selected`")
-            if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
-                st.session_state.selected_workflow = value
-                st.rerun()
-            st.caption(subtitle)
+#     cols = st.columns(len(options))
+#     for col, (value, title, subtitle) in zip(cols, options):
+#         with col:
+#             is_active = st.session_state.selected_workflow == value
+#             if is_active:
+#                 st.markdown("`Selected`")
+#             if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
+#                 st.session_state.selected_workflow = value
+#                 st.rerun()
+#             st.caption(subtitle)
 
-    st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
+#     st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
 
 
 with st.sidebar:
@@ -370,12 +370,12 @@ with st.sidebar:
         st.rerun()
 
     active_conv = get_active_conversation()
-    st.caption(f"Session ID: `{active_conv['session_id'][:8]}...`")
+    # st.caption(f"Session ID: `{active_conv['session_id'][:8]}...`")
 
-    if st.button("🧹 Clear Current Chat", use_container_width=True):
-        st.session_state.messages = []
-        sync_active_conversation_messages()
-        st.rerun()
+    # if st.button("🧹 Clear Current Chat", use_container_width=True):
+    #     st.session_state.messages = []
+    #     sync_active_conversation_messages()
+    #     st.rerun()
 
     st.markdown("---")
     st.subheader("Settings")
@@ -411,7 +411,7 @@ with st.sidebar:
 
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
-render_workflow_cards()
+# render_workflow_cards()
 
 active_conv = get_active_conversation()
 st.session_state.session_id = active_conv["session_id"]
@@ -515,5 +515,5 @@ if user_input:
                 if st.session_state.debug_mode:
                     st.exception(exc)
 
-st.markdown("---")
-st.caption("NIH Stage Model AI Chatbot | Built with Streamlit")
+# st.markdown("---")
+# st.caption("NIH Stage Model AI Chatbot | Built with Streamlit")
