@@ -431,8 +431,8 @@ for message in st.session_state.messages:
             render_thinking_trace(message.get("debug") or {})
 
 uploaded_files = st.file_uploader(
-    "Attach files/images for this turn (PDF, DOCX, TXT, PNG/JPG/JPEG/WEBP/GIF)",
-    type=["pdf", "docx", "txt", "png", "jpg", "jpeg", "webp", "gif"],
+    "Attach files for this turn",
+    type=["pdf", "docx", "txt"],
     accept_multiple_files=True,
     help="Parsed text will be appended as uploaded context for the next message.",
 )
