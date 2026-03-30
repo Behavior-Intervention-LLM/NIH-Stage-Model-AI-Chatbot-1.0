@@ -91,6 +91,8 @@ if "active_conversation_id" not in st.session_state:
     st.session_state.active_conversation_id = next(iter(st.session_state.conversations.keys()))
 
 
+
+# What is happening here
 def create_new_conversation(title: str = "New Chat") -> str:
     conv_id = str(uuid.uuid4())
     st.session_state.conversations[conv_id] = {
@@ -122,8 +124,9 @@ def human_title(title: str) -> str:
     return title if title and title.strip() else "Untitled Chat"
 
 
+# Extracting PDF
 def _extract_text_from_pdf(file_bytes: bytes) -> str:
-    py_pdf2 = importlib.util.find_spec("PyPDF2")
+    py_pdf2 = importlib.util.find_spec("PyPDF2") # type: ignore
     if py_pdf2 is None:
         return ""
     PyPDF2 = importlib.import_module("PyPDF2")
@@ -139,6 +142,7 @@ def _extract_text_from_pdf(file_bytes: bytes) -> str:
         return ""
 
 
+# Extracting DOCX
 def _extract_text_from_docx(file_bytes: bytes) -> str:
     docx_spec = importlib.util.find_spec("docx")
     if docx_spec is None:
@@ -152,6 +156,7 @@ def _extract_text_from_docx(file_bytes: bytes) -> str:
         return ""
 
 
+# Extracting TXT
 def _extract_text_from_txt(file_bytes: bytes) -> str:
     for enc in ("utf-8", "utf-16", "latin-1"):
         try:
@@ -179,6 +184,7 @@ def _extract_text_from_image(file_bytes: bytes) -> tuple[str, str]:
         return "", "Image OCR completed but no text found."
     except Exception:
         return "", "Image OCR failed."
+
 
 
 def parse_uploaded_files(uploaded_files) -> tuple[str, list[str]]:
@@ -215,10 +221,11 @@ def parse_uploaded_files(uploaded_files) -> tuple[str, list[str]]:
     return merged[:12000], parse_logs
 
 
+# What is happening here
 def check_backend_health() -> bool:
     try:
-        response = requests.get(BACKEND_HEALTH, timeout=2)
-        return response.status_code == 200
+        get_orchestrator()
+        return True
     except Exception:
         return False
 
@@ -295,46 +302,46 @@ def render_thinking_trace(debug_info: dict):
     html = "<br/>".join(line.replace("<", "&lt;").replace(">", "&gt;") for line in lines)
     st.markdown(
         f"""
-            <div style="
-            background: #f6f7f8;
-            border: 1px solid #e6e8eb;
-            border-radius: 8px;
-            padding: 10px 12px;
-            color: #6b7280;
-            font-size: 12px;
-            line-height: 1.45;">
-            <div style="font-weight: 600; color: #9ca3af; margin-bottom: 6px;">Thinking Trace</div>
-            {html}
-            </div>
-        """,
+<div style="
+  background: #f6f7f8;
+  border: 1px solid #e6e8eb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;">
+  <div style="font-weight: 600; color: #9ca3af; margin-bottom: 6px;">Thinking Trace</div>
+  {html}
+</div>
+""",
         unsafe_allow_html=True,
     )
 
 
-# def render_workflow_cards():
-    # st.markdown("### Guided Workflows")
-    # st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
+def render_workflow_cards():
+    st.markdown("### Guided Workflows")
+    st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
 
-    # options = [
-    #     ("auto", "Auto", "Intent-driven routing"),
-    #     ("mechanism_coach", "Mechanism Coach", "Mechanism ranking + validation"),
-    #     ("study_builder", "Study Builder", "Stage-specific design matrix"),
-    #     ("grant_partner", "Grant Partner", "Specific aims + reviewer critique"),
-    #     ("measure_finder", "Measure Finder", "Construct-to-measure shortlist"),
-    # ]
+    options = [
+        ("auto", "🧠 Auto", "Intent-driven routing"),
+        ("mechanism_coach", "🧬 Mechanism Coach", "Mechanism ranking + validation"),
+        ("study_builder", "🧱 Study Builder", "Stage-specific design matrix"),
+        ("grant_partner", "📝 Grant Partner", "Specific aims + reviewer critique"),
+        ("measure_finder", "📏 Measure Finder", "Construct-to-measure shortlist"),
+    ]
 
-    # cols = st.columns(len(options))
-    # for col, (value, title, subtitle) in zip(cols, options):
-    #     with col:
-    #         is_active = st.session_state.selected_workflow == value
-    #         if is_active:
-    #             st.markdown("`Selected`")
-    #         if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
-    #             st.session_state.selected_workflow = value
-    #             st.rerun()
-    #         st.caption(subtitle)
+    cols = st.columns(len(options))
+    for col, (value, title, subtitle) in zip(cols, options):
+        with col:
+            is_active = st.session_state.selected_workflow == value
+            if is_active:
+                st.markdown("`Selected`")
+            if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
+                st.session_state.selected_workflow = value
+                st.rerun()
+            st.caption(subtitle)
 
-    # st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
+    st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
 
 
 with st.sidebar:
@@ -347,7 +354,6 @@ with st.sidebar:
         st.rerun()
 
     conversation_ids = list(st.session_state.conversations.keys())
-    
     selected_conv_id = st.radio(
         "History",
         options=conversation_ids,
@@ -357,7 +363,6 @@ with st.sidebar:
         format_func=lambda cid: human_title(st.session_state.conversations[cid].get("title", "New Chat")),
         label_visibility="collapsed",
     )
-
     if selected_conv_id != st.session_state.active_conversation_id:
         st.session_state.active_conversation_id = selected_conv_id
         st.session_state.session_id = selected_conv_id
@@ -365,12 +370,12 @@ with st.sidebar:
         st.rerun()
 
     active_conv = get_active_conversation()
-    # st.caption(f"Session ID: `{active_conv['session_id'][:8]}...`")
+    st.caption(f"Session ID: `{active_conv['session_id'][:8]}...`")
 
-    # if st.button("Clear Current Chat", use_container_width=True):
-    #     st.session_state.messages = []
-    #     sync_active_conversation_messages()
-    #     st.rerun()
+    if st.button("🧹 Clear Current Chat", use_container_width=True):
+        st.session_state.messages = []
+        sync_active_conversation_messages()
+        st.rerun()
 
     st.markdown("---")
     st.subheader("Settings")
@@ -384,10 +389,9 @@ with st.sidebar:
     st.subheader("System Status")
     backend_ok = check_backend_health()
     if backend_ok:
-        st.success("✅ Backend Connected")
+        st.success("✅ System Ready")
     else:
-        st.error("❌ Backend Disconnected")
-        st.info("Start backend first:\n```bash\nuvicorn app.main:app --reload\n```")
+        st.error("❌ System failed to initialize")
 
     st.markdown("---")
     with st.expander("📖 Usage"):
@@ -407,15 +411,14 @@ with st.sidebar:
 
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
-# render_workflow_cards()
+render_workflow_cards()
 
 active_conv = get_active_conversation()
 st.session_state.session_id = active_conv["session_id"]
 st.session_state.messages = active_conv.get("messages", [])
 
 if not backend_ok:
-    st.warning("⚠️ Backend is not running. Please start it first.")
-    st.code("uvicorn app.main:app --reload --host 0.0.0.0 --port 8000", language="bash")
+    st.error("⚠️ System failed to initialize. Check your environment variables and dependencies.")
     st.stop()
 
 for message in st.session_state.messages:
@@ -428,7 +431,7 @@ for message in st.session_state.messages:
             render_thinking_trace(message.get("debug") or {})
 
 uploaded_files = st.file_uploader(
-    "",
+    "Attach files/images for this turn (PDF, DOCX, TXT, PNG/JPG/JPEG/WEBP/GIF)",
     type=["pdf", "docx", "txt", "png", "jpg", "jpeg", "webp", "gif"],
     accept_multiple_files=True,
     help="Parsed text will be appended as uploaded context for the next message.",
@@ -456,75 +459,61 @@ if user_input:
             parsed_context_text, parse_logs = parse_uploaded_files(uploaded_files)
             if parsed_context_text:
                 payload["document_text"] = parsed_context_text
-                with st.expander("Parsed Upload Context", expanded=False):
+                with st.expander("📎 Parsed Upload Context", expanded=False):
                     st.caption(f"Parsed chars: {len(parsed_context_text)}")
                     st.text(parsed_context_text[:1200] + ("..." if len(parsed_context_text) > 1200 else ""))
             if parse_logs:
-                with st.expander("Upload Parse Logs", expanded=False):
+                with st.expander("🧾 Upload Parse Logs", expanded=False):
                     for item in parse_logs:
                         st.text(f"- {item}")
             try:
-                response = requests.post(BACKEND_URL, json=payload, timeout=90)
-                response.raise_for_status()
-                data = response.json()
+                is_valid, error_msg = Guardrails.validate_message(payload["message"])
+                if not is_valid:
+                    st.error(f"❌ {error_msg}")
+                else:
+                    orchestrator = get_orchestrator()
+                    reply, debug_info = orchestrator.process_message(
+                        session_id=payload["session_id"],
+                        user_message=payload["message"],
+                        workflow_override=payload.get("workflow"),
+                        uploaded_context_text=payload.get("document_text"),
+                    )
+                    reply = Guardrails.sanitize_response(reply)
+                    st.markdown(reply)
 
-                reply = data.get("reply", "Sorry, I could not generate a response.")
-                st.markdown(reply)
+                    debug_info = debug_info or {}
+                    if debug_info and st.session_state.debug_mode:
+                        with st.expander("🔍 Debug Info", expanded=False):
+                            st.json(debug_info)
+                            if debug_info.get("stage"):
+                                st.metric("Detected Stage", debug_info.get("stage"))
+                            if debug_info.get("stage_confidence") is not None:
+                                st.metric(
+                                    "Stage Confidence",
+                                    f"{debug_info.get('stage_confidence'):.2f}",
+                                )
+                            if debug_info.get("route_mode"):
+                                st.text(f"Route Mode: {debug_info.get('route_mode')}")
+                            if debug_info.get("agents_called"):
+                                st.text(
+                                    f"Called Agents: {', '.join(debug_info.get('agents_called', []))}"
+                                )
+                    if debug_info and st.session_state.show_thinking_trace:
+                        render_thinking_trace(debug_info)
 
-                citations = data.get("citations", [])
-                if citations:
-                    with st.expander("References", expanded=False):
-                        for i, citation in enumerate(citations, 1):
-                            st.markdown(
-                                f"**Reference {i}** (source: {citation.get('source', 'unknown')})"
-                            )
-                            st.text(citation.get("passage", "")[:300] + "...")
-                            if citation.get("relevance_score") is not None:
-                                st.caption(f"Relevance: {citation.get('relevance_score'):.2f}")
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": reply,
+                        "timestamp": datetime.now().isoformat(),
+                        "debug": debug_info,
+                    }
+                    st.session_state.messages.append(assistant_message)
+                    sync_active_conversation_messages()
 
-                next_question = data.get("next_question")
-                if next_question:
-                    st.info(f"💡 {next_question}")
-
-                debug_info = data.get("debug", {})
-                if debug_info and st.session_state.debug_mode:
-                    with st.expander("Debug Info", expanded=False):
-                        st.json(debug_info)
-                        if debug_info.get("stage"):
-                            st.metric("Detected Stage", debug_info.get("stage"))
-                        if debug_info.get("stage_confidence") is not None:
-                            st.metric(
-                                "Stage Confidence",
-                                f"{debug_info.get('stage_confidence'):.2f}",
-                            )
-                        if debug_info.get("route_mode"):
-                            st.text(f"Route Mode: {debug_info.get('route_mode')}")
-                        if debug_info.get("agents_called"):
-                            st.text(
-                                f"Called Agents: {', '.join(debug_info.get('agents_called', []))}"
-                            )
-                if debug_info and st.session_state.show_thinking_trace:
-                    render_thinking_trace(debug_info)
-
-                assistant_message = {
-                    "role": "assistant",
-                    "content": reply,
-                    "timestamp": datetime.now().isoformat(),
-                    "debug": debug_info,
-                    "citations": citations,
-                }
-                st.session_state.messages.append(assistant_message)
-                sync_active_conversation_messages()
-
-            except requests.exceptions.ConnectionError:
-                st.error("❌ Cannot connect to backend. Ensure the service is running.")
-                st.code("uvicorn app.main:app --reload", language="bash")
-            except requests.exceptions.Timeout:
-                st.error("⏱️ Request timed out. Please try again.")
             except Exception as exc:
                 st.error(f"❌ Error: {str(exc)}")
                 if st.session_state.debug_mode:
                     st.exception(exc)
 
-# st.markdown("---")
-# st.caption("NIH Stage Model AI Chatbot | Built with FastAPI + Streamlit")
+st.markdown("---")
+st.caption("NIH Stage Model AI Chatbot | Built with Streamlit")
