@@ -22,6 +22,7 @@ from app.core.types import AgentOutput, MessageRole, SessionState, ToolCall
 from app.tools.base import ToolRegistry
 
 
+
 class ChatGraphState(TypedDict, total=False):
     session_id: str
     user_message: str
@@ -630,64 +631,30 @@ class Orchestrator:
         user_message = gstate["user_message"]
         context = gstate["context"]
 
-        # Hard gate: in stage flow, low-confidence or null-stage must enter clarify-only mode.
-        must_clarify = (
+        # Low stage confidence is passed to ResponderAgent; the LLM decides tone and follow-ups.
+        if (
             self._as_bool(gstate.get("intent_need_stage"), default=False)
             and not self._as_bool(gstate.get("intent_is_definition"), default=False)
             and (
                 gstate.get("stage_result") is None
                 or float(gstate.get("stage_confidence", 0.0)) < 0.75
             )
-        )
-
-        if must_clarify:
-            missing_info = state.slots.extracted_features.get("missing_info") or []
-            if not missing_info:
-                missing_info = state.slots.extracted_features.get("intent_missing_info") or []
-            if not missing_info:
-                missing_info = [
-                    "study design (pilot vs RCT)",
-                    "sample size",
-                    "key efficacy/effectiveness outcomes",
-                    "delivery setting (controlled vs real-world)",
-                ]
-
-            clarifying_question = state.slots.extracted_features.get("clarifying_question")
-            if not clarifying_question:
-                clarifying_question = state.slots.extracted_features.get("intent_clarifying_question")
-            if not clarifying_question:
-                clarifying_question = (
-                    "Is this a pilot/feasibility study, an efficacy RCT, or a real-world effectiveness study?"
-                )
-
-            reply_lines = [
-                "I do not yet have enough information to determine the NIH Stage accurately.",
-                "At this point, assigning a specific stage would be overconfident.",
-                "Please provide the following key information:",
-            ]
-            for i, item in enumerate(missing_info[:4], 1):
-                reply_lines.append(f"{i}. {item}")
-            reply_lines.append(f"Most important follow-up: {clarifying_question}")
-            reply = "\\n".join(reply_lines)
-
+        ):
+            gstate.setdefault("debug_info", {})["stage_uncertain_hint"] = True
             self._trace(
                 gstate,
                 {
-                    "kind": "gate",
-                    "name": "clarify_only_gate",
-                    "triggered": True,
-                    "reason": "stage is null or stage confidence < 0.75",
-                    "stage_result": gstate.get("stage_result"),
+                    "kind": "note",
+                    "name": "stage_uncertain",
+                    "stage": gstate.get("stage_result"),
                     "stage_confidence": gstate.get("stage_confidence", 0.0),
                 },
             )
-            gstate["debug_info"].update(
-                {
-                    "route_mode": "stage_clarify",
-                    "route_notes": "hard gate: clarify-only mode (no free stage guess)",
-                }
-            )
-            return {**gstate, "state": state, "reply": reply}
+
+        if gstate.get("debug_info", {}).get("stage_uncertain_hint"):
+            state.slots.extracted_features["stage_uncertain_hint"] = True
+        else:
+            state.slots.extracted_features.pop("stage_uncertain_hint", None)
 
         out = self.agents["responder_agent"].run(state, user_message, context)
         self.agents["responder_agent"].update_state(state, out)
@@ -699,35 +666,27 @@ class Orchestrator:
         guardrail_warnings = state.slots.extracted_features.get("guardrail_warnings", []) or []
 
         if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and workflow_structured:
-            intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
-            stage_value = state.slots.stage or gstate.get("stage_result")
-            stage_conf = float(state.slots.stage_confidence or gstate.get("stage_confidence", 0.0) or 0.0)
-            reasoning_summary = state.slots.extracted_features.get("reasoning_summary") or "No explicit stage reasoning summary captured."
-            agents_called = gstate.get("called_agents", [])
-            route_notes = gstate.get("debug_info", {}).get("route_notes", "")
             responder_summary = (out.user_facing or "").strip()
-
             pretty_structured = json.dumps(workflow_structured, ensure_ascii=False, indent=2)
-            reply_lines = [
-                f"Workflow: {workflow}",
-                "",
-                "Reasoning Path:",
-                f"1) Intent -> workflow={intent_payload.get('workflow', workflow)}, query_type={intent_payload.get('query_type', 'unknown')}, need_stage={intent_payload.get('need_stage', 'unknown')}",
-                f"2) Stage inference -> stage={stage_value}, confidence={stage_conf:.2f}",
-                f"3) Stage analysis -> {reasoning_summary}",
-                f"4) Workflow execution -> {workflow_summary or 'Structured workflow output generated.'}",
-                f"5) Agent chain -> {', '.join(agents_called)}",
-            ]
-            if route_notes:
-                reply_lines.append(f"Routing note -> {route_notes}")
+
+            reply_parts: list[str] = []
             if responder_summary:
-                reply_lines.extend(["", "Final synthesis:", responder_summary])
-            reply_lines.extend(["", "Workflow structured output:", "```json", pretty_structured, "```"])
+                reply_parts.append(responder_summary)
+            else:
+                intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
+                stage_value = state.slots.stage or gstate.get("stage_result")
+                stage_conf = float(state.slots.stage_confidence or gstate.get("stage_confidence", 0.0) or 0.0)
+                reasoning_summary = state.slots.extracted_features.get("reasoning_summary") or ""
+                reply_parts.append(
+                    f"**{workflow}** — stage **{stage_value}** (confidence {stage_conf:.2f}). "
+                    f"{reasoning_summary or workflow_summary or 'See structured output below.'}"
+                )
+
+            # reply_parts.extend(["", "---", f"**Structured output** (`{workflow}`):", "```json", pretty_structured, "```"])
             if guardrail_warnings:
-                reply_lines.append("Warnings:")
-                for i, item in enumerate(guardrail_warnings[:3], 1):
-                    reply_lines.append(f"{i}. {item}")
-            reply = "\n".join(reply_lines)
+                reply_parts.append("")
+                reply_parts.append("**Note:** " + " ".join(str(w) for w in guardrail_warnings[:3]))
+            reply = "\n".join(reply_parts)
             gstate["debug_info"].update({"route_mode": f"{workflow}_answer"})
             return {**gstate, "state": state, "last_output": out, "reply": reply}
 
