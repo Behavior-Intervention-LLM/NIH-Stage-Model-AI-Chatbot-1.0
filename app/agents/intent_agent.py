@@ -313,7 +313,3 @@ class IntentAgent(BaseAgent):
         state.slots.extracted_features["intent_payload"] = output.decision
         if output.decision.get("user_goal"):
             state.slots.user_goal = output.decision.get("user_goal")
-
-
-# uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-# streamlit run frontend_streamlit.py

@@ -1,8 +1,10 @@
 """
 Responder Agent: execute plan and generate final user-facing response.
 """
+import json
 import re
-from typing import List
+from pathlib import Path
+from typing import Any, List
 
 from app.agents.base import BaseAgent
 from app.core.llm import llm_client
@@ -11,6 +13,26 @@ from app.core.types import AgentOutput, SessionState
 
 class ResponderAgent(BaseAgent):
     """Response generation agent."""
+
+    _FALLBACK_SECTIONS = {
+        "system_definition": (
+            "You are an NIH Stage Model explainer. "
+            "Answer only the current definition/list question. "
+            "Do not include prior case details or stage-classification follow-ups. "
+            "If retrieval evidence is available, prioritize the newest/revised source and mention it explicitly."
+        ),
+        "system_general": (
+            "You are an NIH Stage Model assistant. Synthesize a single clear answer for the user.\n"
+            "Use every relevant fact in the CONTEXT block below (stage, confidence, workflow outputs, RAG snippets, "
+            "missing info, guardrails). Do not dump raw field names or imitate an internal execution trace.\n"
+            "If stage confidence is low or stage is unknown, say so plainly and ask focused follow-ups.\n"
+            "If retrieval evidence exists, ground claims briefly (sources or quotes as appropriate).\n"
+            "Match the user's language when obvious. Output plain text only (no JSON)."
+        ),
+        "user_instruction_definition": (
+            "Provide: (1) number of stages, (2) stage names, and (3) one-line description per stage."
+        ),
+    }
 
     STAGE_INFO = {
         "0": "Stage 0 focuses on basic research, mechanism discovery, and hypothesis building.",
@@ -23,6 +45,39 @@ class ResponderAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("ResponderAgent")
+        self._prompt_file = Path(__file__).resolve().parents[1] / "prompts" / "responder.md"
+
+    @staticmethod
+    def _parse_responder_markdown(text: str) -> dict[str, str]:
+        """Split app/prompts/responder.md on `## section_name` headings (level-2 only)."""
+        sections: dict[str, str] = {}
+        current: str | None = None
+        buf: list[str] = []
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("## ") and not s.startswith("###"):
+                if current is not None:
+                    sections[current] = "\n".join(buf).strip()
+                current = s[3:].strip()
+                buf = []
+            elif current is not None:
+                buf.append(line)
+        if current is not None:
+            sections[current] = "\n".join(buf).strip()
+        return sections
+
+    def _get_responder_sections(self) -> dict[str, str]:
+        merged = dict(self._FALLBACK_SECTIONS)
+        try:
+            if self._prompt_file.exists():
+                raw = self._prompt_file.read_text(encoding="utf-8")
+                parsed = self._parse_responder_markdown(raw)
+                for key, val in parsed.items():
+                    if val:
+                        merged[key] = val
+        except Exception:
+            pass
+        return merged
 
     @staticmethod
     def _collect_evidence(state: SessionState) -> tuple[List[str], List[str], List]:
@@ -44,10 +99,80 @@ class ResponderAgent(BaseAgent):
 
         return evidence_lines, evidence_sources, citations
 
+    def _workflow_structured_excerpt(self, structured: Any, max_chars: int = 4500) -> str:
+        if not structured:
+            return "{}"
+        try:
+            raw = json.dumps(structured, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError):
+            raw = str(structured)
+        if len(raw) > max_chars:
+            return raw[:max_chars] + "\n… [truncated]"
+        return raw
+
+    def _build_general_context(
+        self,
+        state: SessionState,
+        user_message: str,
+        context: str,
+        evidence_lines: List[str],
+        evidence_sources: List[str],
+    ) -> str:
+        rag_active = len(evidence_lines) > 0 or len(evidence_sources) > 0
+        intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
+        xf = state.slots.extracted_features
+        workflow = xf.get("workflow", "navigator")
+        workflow_summary = xf.get("workflow_summary") or ""
+        workflow_structured = xf.get("workflow_structured_output") or {}
+        guardrail_warnings = xf.get("guardrail_warnings") or []
+
+        lines = [
+            f"User question: {user_message}",
+            "",
+            "--- CONTEXT (for synthesis; do not quote section headers to the user) ---",
+            f"Inferred stage: {state.slots.stage!r} | stage_confidence: {state.slots.stage_confidence!r}",
+            f"Workflow mode: {workflow}",
+            f"Workflow agent summary: {workflow_summary}",
+            "",
+            "Workflow structured JSON:",
+            self._workflow_structured_excerpt(workflow_structured),
+            "",
+            f"Intent payload: {intent_payload}",
+            f"Planner outline: {xf.get('planner_outline')}",
+            f"Next question (upstream): {xf.get('next_question')}",
+            f"Stage reasoning summary: {xf.get('reasoning_summary')}",
+            f"Missing info (stage): {xf.get('missing_info')}",
+            f"Missing info (intent): {xf.get('intent_missing_info')}",
+            f"Clarifying question (stage): {xf.get('clarifying_question')}",
+            f"Clarifying question (intent): {xf.get('intent_clarifying_question')}",
+            f"RAG active: {rag_active}",
+            f"Knowledge sources: {evidence_sources}",
+            f"Evidence snippets: {evidence_lines}",
+            f"Guardrail warnings: {guardrail_warnings}",
+            f"Stage uncertain (low confidence or unknown): {xf.get('stage_uncertain_hint', False)}",
+            "",
+            "Full slots (reference):",
+            json.dumps(state.slots.model_dump(), ensure_ascii=False, default=str)[:6000],
+            "",
+            f"Recent conversation context:\n{(context or '')[:2000]}",
+        ]
+        return "\n".join(lines)
+
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
-        llm_output = self._run_with_llm(state, user_message, context)
-        if llm_output:
-            return llm_output
+        if llm_client.is_enabled():
+            llm_output = self._run_with_llm(state, user_message, context)
+            if llm_output and (llm_output.user_facing or "").strip():
+                return llm_output
+            return AgentOutput(
+                decision={},
+                confidence=0.25,
+                analysis="LLM returned empty response",
+                user_facing=(
+                    "I could not generate a reply (the language model returned no text). "
+                    "Please try again or check your LLM provider configuration."
+                ),
+                metadata={},
+            )
         return self._run_with_rules(state, user_message)
 
     def _run_with_llm(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput | None:
@@ -55,7 +180,6 @@ class ResponderAgent(BaseAgent):
             return None
 
         evidence_lines, evidence_sources, citations = self._collect_evidence(state)
-        rag_active = len(evidence_lines) > 0 or len(evidence_sources) > 0
 
         message_lower = user_message.lower().strip()
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
@@ -66,54 +190,24 @@ class ResponderAgent(BaseAgent):
             and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model"])
         ) or intent_query_type == "definition"
 
-        planner_outline = state.slots.extracted_features.get("planner_outline")
-        next_question = state.slots.extracted_features.get("next_question")
-        stage_reasoning = state.slots.extracted_features.get("reasoning_summary")
-        missing_info = state.slots.extracted_features.get("missing_info", [])
-        clarifying_question = state.slots.extracted_features.get("clarifying_question")
-        intent_missing = state.slots.extracted_features.get("intent_missing_info", []) or []
-        intent_clarifying = state.slots.extracted_features.get("intent_clarifying_question")
+        sections = self._get_responder_sections()
 
         if is_stage_definition_query:
-            system_prompt = (
-                "You are an NIH Stage Model explainer. "
-                "Answer only the current definition/list question. "
-                "Do not include prior case details or stage-classification follow-ups. "
-                "If retrieval evidence is available, prioritize the newest/revised source and mention it explicitly."
-            )
+            system_prompt = sections["system_definition"]
+            user_tail = sections.get("user_instruction_definition") or self._FALLBACK_SECTIONS[
+                "user_instruction_definition"
+            ]
             user_prompt = (
                 f"Question: {user_message}\n"
                 f"Knowledge sources: {evidence_sources}\n"
                 f"Evidence snippets: {evidence_lines}\n"
-                "Provide: (1) number of stages, (2) stage names, and (3) one-line description per stage."
+                f"{user_tail}"
             )
             text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
         else:
-            system_prompt = (
-                "You are an NIH Stage Model assistant.\n"
-                "Rules:\n"
-                "1) Answer the user's current question directly.\n"
-                "2) If stage is known, explicitly write Stage 0 / Stage I / Stage II / Stage III / Stage IV / Stage V.\n"
-                "3) Include a short reasoning summary.\n"
-                "4) If information is missing, list missing items and ask a follow-up question.\n"
-                "5) If evidence exists, explicitly include 'Based on knowledge sources: ...'.\n"
-                "6) Provide a detailed but concise response in 2-4 short paragraphs."
-            )
-            user_prompt = (
-                f"Question: {user_message}\n"
-                f"Slots: {state.slots.model_dump()}\n"
-                f"Intent payload: {intent_payload}\n"
-                f"Planner outline: {planner_outline}\n"
-                f"Next question: {next_question}\n"
-                f"Stage reasoning: {stage_reasoning}\n"
-                f"Missing info (stage): {missing_info}\n"
-                f"Missing info (intent): {intent_missing}\n"
-                f"Clarifying question (stage): {clarifying_question}\n"
-                f"Clarifying question (intent): {intent_clarifying}\n"
-                f"RAG active: {rag_active}\n"
-                f"Knowledge sources: {evidence_sources}\n"
-                f"Evidence snippets: {evidence_lines}\n"
-                f"Recent context: {context[:1600]}"
+            system_prompt = sections["system_general"]
+            user_prompt = self._build_general_context(
+                state, user_message, context, evidence_lines, evidence_sources
             )
             text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
 
