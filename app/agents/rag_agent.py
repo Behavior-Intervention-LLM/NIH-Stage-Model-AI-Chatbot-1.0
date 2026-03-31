@@ -74,9 +74,9 @@ class RAGAgent(BaseAgent):
         query_vector = self.bi_encoder.encode(prompt_query).tolist()
 
         # Step 2: Vector search (broad recall)
-        response = self.qdrant.query(
+        response = self.qdrant.search(
             collection_name=self.collection_name,
-            query_data=query_vector,
+            query_vector=query_vector,  # Changed from query_data
             limit=40,
             with_payload=True
         )
