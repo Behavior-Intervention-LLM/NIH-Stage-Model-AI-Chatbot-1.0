@@ -193,7 +193,7 @@ class ResponderAgent(BaseAgent):
             and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model"])
         ) or intent_query_type == "definition"
 
-        stage_info_text = self._format_stage_info()
+        # stage_info_text = self._format_stage_info()
 
         sections = self._get_responder_sections()
 
@@ -211,7 +211,7 @@ class ResponderAgent(BaseAgent):
             
             user_prompt = (
                 f"{base_context}\n\n"
-                f"{stage_info_text}\n"
+                # f"{stage_info_text}\n"
                 f"--- TASK INSTRUCTION ---\n"
                 f"{user_tail}\n"
             )
