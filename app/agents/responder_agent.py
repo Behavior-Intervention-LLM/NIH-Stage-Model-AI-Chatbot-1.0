@@ -16,11 +16,12 @@ class ResponderAgent(BaseAgent):
 
     _FALLBACK_SECTIONS = {
         "system_definition": (
-            "You are an NIH Stage Model explainer. "
-            "Answer only the current definition/list question. "
-            "Do not include prior case details or stage-classification follow-ups. "
-            "If retrieval evidence is available, prioritize the newest/revised source and mention it explicitly."
+            "Use retrieval evidence to support or refine your answer, "
+            "but do not restrict your answer only to the provided snippets. "
+            "If the retrieved evidence is incomplete, provide the best complete answer from your general knowledge "
+            "and note that the snippet is incomplete."
         ),
+
         "system_general": (
             "You are an NIH Stage Model assistant. Synthesize a single clear answer for the user.\n"
             "Use every relevant fact in the CONTEXT block below (stage, confidence, workflow outputs, RAG snippets, "
@@ -185,10 +186,8 @@ class ResponderAgent(BaseAgent):
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_query_type = str(intent_payload.get("query_type", "")).lower()
 
-        is_stage_definition_query = (
-            any(k in message_lower for k in ["what is", "what's", "define", "how many stages", "number of stages", "list stages"])
-            and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model"])
-        ) or intent_query_type == "definition"
+        is_stage_definition_query = (intent_query_type == "definition")
+        stage_info_text = self._format_stage_info()
 
         sections = self._get_responder_sections()
 
@@ -197,13 +196,20 @@ class ResponderAgent(BaseAgent):
             user_tail = sections.get("user_instruction_definition") or self._FALLBACK_SECTIONS[
                 "user_instruction_definition"
             ]
-            user_prompt = (
-                f"Question: {user_message}\n"
-                f"Knowledge sources: {evidence_sources}\n"
-                f"Evidence snippets: {evidence_lines}\n"
-                f"{user_tail}"
+
+            base_context = self._build_general_context(
+                state, user_message, context, evidence_lines, evidence_sources
             )
+            
+            user_prompt = (
+                f"{base_context}\n\n"
+                f"{stage_info_text}\n"
+                f"--- TASK INSTRUCTION ---\n"
+                f"{user_tail}\n"
+            )
+
             text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
+
         else:
             system_prompt = sections["system_general"]
             user_prompt = self._build_general_context(
@@ -221,6 +227,48 @@ class ResponderAgent(BaseAgent):
             user_facing=text.strip(),
             metadata={"citations": [c.model_dump() for c in citations]},
         )
+
+    # def _run_with_llm(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
+    #     evidence_lines, evidence_sources, citations = self._collect_evidence(state)
+    #     sections = self._get_responder_sections()
+    #     mode = self._detect_query_mode(user_message, state)
+
+    #     system_prompt = sections["system_global"]
+    #     user_prompt = self._build_user_prompt(
+    #         state=state,
+    #         user_message=user_message,
+    #         context=context,
+    #         evidence_lines=evidence_lines,
+    #         evidence_sources=evidence_sources,
+    #         mode=mode,
+    #         sections=sections,
+    #     )
+
+    #     text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
+
+    #     if not text or not text.strip():
+    #         return AgentOutput(
+    #             decision={},
+    #             confidence=0.2,
+    #             analysis="LLM returned empty response",
+    #             user_facing=(
+    #                 "I could not generate a reply because the language model returned no text. "
+    #                 "Please try again or check the LLM provider configuration."
+    #             ),
+    #             metadata={"mode": mode},
+    #         )
+
+    #     return AgentOutput(
+    #         decision={"mode": mode, "rag_active": bool(evidence_lines or evidence_sources)},
+    #         confidence=0.92,
+    #         analysis=f"LLM generated final response in {mode} mode",
+    #         user_facing=text.strip(),
+    #         metadata={
+    #             "mode": mode,
+    #             "citations": [c.model_dump() for c in citations],
+    #             "evidence_sources": evidence_sources,
+    #         },
+    #     )
 
     def _run_with_rules(self, state: SessionState, user_message: str) -> AgentOutput:
         evidence_texts, evidence_sources, citations = self._collect_evidence(state)
