@@ -70,15 +70,13 @@ class RAGAgent(BaseAgent):
         query_vector = self.bi_encoder.encode(prompt_query).tolist()
 
         # Step 2: Vector search (broad recall)
-        results = self.qdrant.search(
+        response = self.qdrant.query(
             collection_name=self.collection_name,
-            query_vector=query_vector,
+            query_data=query_vector,
             limit=40,
             with_payload=True
         )
-
-        if not results:
-            return []
+        results = response
 
         # Step 3: Build passages (TEXT + KEYWORDS)
         passages = [
