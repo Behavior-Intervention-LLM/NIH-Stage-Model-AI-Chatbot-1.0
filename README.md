@@ -4,6 +4,7 @@ This version uses an OpenAI-compatible inference endpoint (recommended: vLLM).
 Unified backend entrypoint: `POST /chat`.
 
 ---
+<pre><code>```mermaid
 flowchart TD
     %% Phase 1: Ingestion & Memory
     A[START: User Message & Uploads] --> B[Memory Manager: Save User Message & Files to DB]
