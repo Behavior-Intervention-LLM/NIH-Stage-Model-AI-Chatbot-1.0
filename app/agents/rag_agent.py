@@ -4,11 +4,15 @@ import torch
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
+from pathlib import Path
 
 from app.agents.base import BaseAgent
 from app.core.types import AgentOutput, SessionState, ToolCall
 
-load_dotenv("qdrant.env")
+current_file = Path(__file__).resolve()
+app_dir = current_file.parent.parent 
+env_path = app_dir / "core" / "qdrant.env"
+load_dotenv(dotenv_path=env_path)
 
 class RAGAgent(BaseAgent):
     """Agentic RAG Engine: retrieval + reranking + structuring"""
@@ -70,15 +74,13 @@ class RAGAgent(BaseAgent):
         query_vector = self.bi_encoder.encode(prompt_query).tolist()
 
         # Step 2: Vector search (broad recall)
-        results = self.qdrant.search(
+        response = self.qdrant.query(
             collection_name=self.collection_name,
-            query_vector=query_vector,
+            query_data=query_vector,
             limit=40,
             with_payload=True
         )
-
-        if not results:
-            return []
+        results = response
 
         # Step 3: Build passages (TEXT + KEYWORDS)
         passages = [
