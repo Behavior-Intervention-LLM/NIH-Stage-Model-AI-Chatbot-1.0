@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 import torch
-from qdrant_client import QdrantClient
+# from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
 from pathlib import Path
@@ -39,11 +39,27 @@ class RAGAgent(BaseAgent):
         )
 
         # --- Vector DB ---
-        self.qdrant = QdrantClient(
-            url=os.getenv("QDRANT_URL"),
-            api_key=os.getenv("QDRANT_API_KEY")
-        )
-        self.collection_name = "nih_stage_model"
+        # self.qdrant = QdrantClient(
+        #     url=os.getenv("QDRANT_URL"),
+        #     api_key=os.getenv("QDRANT_API_KEY")
+        # )
+        # self.collection_name = "nih_stage_model"
+
+        try:
+            from qdrant_client import QdrantClient
+
+            self.qdrant = QdrantClient(
+                url=os.getenv("QDRANT_URL"),
+                api_key=os.getenv("QDRANT_API_KEY")
+            )
+            self.collection_name = "nih_stage_model"
+            self.qdrant_available = True
+
+        except Exception as e:
+            # print(f"[RAG] Qdrant disabled due to error: {e}")
+            self.qdrant = None
+            self.collection_name = None
+            self.qdrant_available = False
 
     # -------------------------
     # QUERY EXPANSION
@@ -136,6 +152,18 @@ class RAGAgent(BaseAgent):
     # -------------------------
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
 
+        return AgentOutput(
+            user_facing="",
+            decision={
+                "rag_invoked": False,
+                "disabled": True,
+                "reason": "temporary"
+            },
+            actions=[],
+            confidence=0.3,
+            analysis="RAG temporarily disabled"
+        )
+
         msg = user_message.lower()
         intent = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_label = str(intent.get("intent_label", "general_qa"))
@@ -170,17 +198,6 @@ class RAGAgent(BaseAgent):
         #     ]
         # )
 
-        return AgentOutput(
-            user_facing="",
-            decision={
-                "rag_invoked": False,
-                "disabled": True,
-                "reason": "temporary"
-            },
-            actions=[],
-            confidence=0.3,
-            analysis="RAG temporarily disabled"
-        )
 
     # -------------------------
     # STATE UPDATE
