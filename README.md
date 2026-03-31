@@ -37,6 +37,7 @@ flowchart TD
     %% Phase 4: Archiving
     I --> J[Memory Manager: Save AI Response to DB]
     J --> K[Finalize & Return to UI]
+```
 ---
 
 ## 1) Local Development (Recommended for your current setup)
