@@ -186,13 +186,21 @@ class ResponderAgent(BaseAgent):
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_query_type = str(intent_payload.get("query_type", "")).lower()
 
-        is_stage_definition_query = (intent_query_type == "definition")
+        # is_stage_definition_query = (intent_query_type == "definition")
+
+        is_stage_definition_query = (
+            any(k in message_lower for k in ["what is", "what's", "define", "how many stages", "number of stages", "list stages"])
+            and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model"])
+        ) or intent_query_type == "definition"
+
         stage_info_text = self._format_stage_info()
 
         sections = self._get_responder_sections()
 
         if is_stage_definition_query:
-            system_prompt = sections["system_definition"]
+            system_prompt = sections["system_general"]
+
+            # should be the part that concat responder.md
             user_tail = sections.get("user_instruction_definition") or self._FALLBACK_SECTIONS[
                 "user_instruction_definition"
             ]
