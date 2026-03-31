@@ -152,21 +152,33 @@ class RAGAgent(BaseAgent):
 
         found = len(docs) > 0
 
+        # return AgentOutput(
+        #     decision={
+        #         "rag_invoked": should_retrieve,
+        #         "strategy": "agentic_hybrid_rerank",
+        #         "results_found": len(docs)
+        #     },
+        #     confidence=0.95 if found else 0.3,
+        #     analysis="Hybrid semantic retrieval with cross-encoder reranking and structured outputs",
+        #     actions=[
+        #         ToolCall(
+        #             tool_name="rag_retrieval",
+        #             tool_args={"query": search_query},
+        #             output=docs
+        #         )
+        #     ]
+        # )
+
         return AgentOutput(
+            user_facing="",
             decision={
-                "rag_invoked": should_retrieve,
-                "strategy": "agentic_hybrid_rerank",
-                "results_found": len(docs)
+                "rag_invoked": False,
+                "disabled": True,
+                "reason": "temporary"
             },
-            confidence=0.95 if found else 0.3,
-            analysis="Hybrid semantic retrieval with cross-encoder reranking and structured outputs",
-            actions=[
-                ToolCall(
-                    tool_name="rag_retrieval",
-                    tool_args={"query": search_query},
-                    output=docs
-                )
-            ]
+            actions=[],
+            confidence=0.3,
+            analysis="RAG temporarily disabled"
         )
 
     # -------------------------
