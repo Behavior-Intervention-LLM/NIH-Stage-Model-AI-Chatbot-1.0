@@ -4,6 +4,39 @@ This version uses an OpenAI-compatible inference endpoint (recommended: vLLM).
 Unified backend entrypoint: `POST /chat`.
 
 ---
+flowchart TD
+    %% Phase 1: Ingestion & Memory
+    A[START: User Message & Uploads] --> B[Memory Manager: Save User Message & Files to DB]
+    B --> B2[Memory Manager: Load State, Chat History & Doc Text]
+    
+    %% Phase 2: Routing & Logic (Your existing strong core)
+    B2 --> C[Intent Router]
+    C -->|Specific Workflow / Needs Stage| D[Stage Reasoner]
+    C -->|General Query / Definition| F[RAG Planner / Think]
+    
+    D -->|Workflow: Mechanism| M[Mechanism Coach]
+    D -->|Workflow: Study Builder| S[Study Builder]
+    D -->|Workflow: Measure Finder| R[Measure Finder]
+    D -->|Low Stage Confidence| I[Responder / Clarify]
+    D -->|Needs Planning| E[Planner]
+    D -->|Fallback| F
+    
+    M --> W[Guardrails]
+    S --> W
+    R --> W
+    E --> W
+    W --> F
+    
+    %% Phase 3: The ReAct & Qdrant Loop
+    F[RAG Planner / Think\nContext includes: DB History & Uploads] --> G[Run Tools / Act\ne.g., Query Qdrant Vector DB]
+    G --> H[ReAct Judge / Decide]
+    H -->|Needs more info| F
+    H -->|Got the answer| I[Responder: Draft Final Reply]
+    
+    %% Phase 4: Archiving
+    I --> J[Memory Manager: Save AI Response to DB]
+    J --> K[Finalize & Return to UI]
+---
 
 ## 1) Local Development (Recommended for your current setup)
 
