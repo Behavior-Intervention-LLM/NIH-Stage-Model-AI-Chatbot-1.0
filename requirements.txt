@@ -1,5 +1,4 @@
 altair==6.0.0
-annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.12.1
 attrs==25.4.0
@@ -82,4 +81,6 @@ watchfiles==1.1.1
 websockets==16.0
 xxhash==3.6.0
 zstandard==0.25.0
-torch
+torch==2.11.0
+qdrant-client==1.17.1
+sentence-transformers==5.3.0
