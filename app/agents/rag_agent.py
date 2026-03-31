@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import torch
 # from qdrant_client import QdrantClient
-from sentence_transformers import SentenceTransformer, CrossEncoder
+# from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -28,15 +28,27 @@ class RAGAgent(BaseAgent):
         )
 
         # --- Models ---
-        self.bi_encoder = SentenceTransformer(
-            "mixedbread-ai/mxbai-embed-large-v1",
-            device=self.device
-        )
+        try:
+            from sentence_transformers import SentenceTransformer, CrossEncoder
 
-        self.reranker = CrossEncoder(
-            "cross-encoder/ms-marco-MiniLM-L-6-v2",
-            device=self.device
-        )
+            self.bi_encoder = SentenceTransformer(
+                "mixedbread-ai/mxbai-embed-large-v1",
+                device=self.device
+            )
+
+            self.reranker = CrossEncoder(
+                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                device=self.device
+            )
+
+            self.embedding_available = True
+
+        except Exception as e:
+            print(f"[RAG] Embedding models disabled: {e}")
+
+            self.bi_encoder = None
+            self.reranker = None
+            self.embedding_available = False
 
         # --- Vector DB ---
         # self.qdrant = QdrantClient(
