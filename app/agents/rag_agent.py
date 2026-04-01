@@ -163,19 +163,6 @@ class RAGAgent(BaseAgent):
     # MAIN RUN
     # -------------------------
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
-
-        return AgentOutput(
-            user_facing="",
-            decision={
-                "rag_invoked": False,
-                "disabled": True,
-                "reason": "temporary"
-            },
-            actions=[],
-            confidence=0.3,
-            analysis="RAG temporarily disabled"
-        )
-
         msg = user_message.lower()
         intent = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_label = str(intent.get("intent_label", "general_qa"))
@@ -193,23 +180,22 @@ class RAGAgent(BaseAgent):
 
         found = len(docs) > 0
 
-        # return AgentOutput(
-        #     decision={
-        #         "rag_invoked": should_retrieve,
-        #         "strategy": "agentic_hybrid_rerank",
-        #         "results_found": len(docs)
-        #     },
-        #     confidence=0.95 if found else 0.3,
-        #     analysis="Hybrid semantic retrieval with cross-encoder reranking and structured outputs",
-        #     actions=[
-        #         ToolCall(
-        #             tool_name="rag_retrieval",
-        #             tool_args={"query": search_query},
-        #             output=docs
-        #         )
-        #     ]
-        # )
-
+        return AgentOutput(
+            decision={
+                "rag_invoked": should_retrieve,
+                "strategy": "agentic_hybrid_rerank",
+                "results_found": len(docs)
+            },
+            confidence=0.95 if found else 0.3,
+            analysis="Hybrid semantic retrieval with cross-encoder reranking and structured outputs",
+            actions=[
+                ToolCall(
+                    tool_name="rag_retrieval",
+                    tool_args={"query": search_query},
+                    output=docs
+                )
+            ]
+        )
 
     # -------------------------
     # STATE UPDATE
