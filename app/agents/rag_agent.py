@@ -220,6 +220,9 @@ class RAGAgent(BaseAgent):
     # -------------------------
     # STATE UPDATE
     # -------------------------
+    # def update_state(self, state: SessionState, output: AgentOutput):
+    #     if output.actions and output.actions[0].output:
+    #         state.slots.extracted_features["retrieved_context"] = output.actions[0].output
+
     def update_state(self, state: SessionState, output: AgentOutput):
-        if output.actions and output.actions[0].output:
-            state.slots.extracted_features["retrieved_context"] = output.actions[0].output
+        state.slots.extracted_features["retrieved_context"] = ""
