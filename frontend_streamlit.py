@@ -411,7 +411,7 @@ with st.sidebar:
 
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
-# render_workflow_cards()
+render_workflow_cards()
 
 active_conv = get_active_conversation()
 st.session_state.session_id = active_conv["session_id"]
