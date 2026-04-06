@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     # configuration
     VECTOR_STORE_PATH: str = os.getenv("VECTOR_STORE_PATH", "data/vector_store")
     DOCUMENTS_DIR: str = os.getenv("DOCUMENTS_DIR", "data/documents")
-    
+
+    # When True, Orchestrator uses a no-op RAG agent (no Qdrant/embeddings) to test other pipeline stages.
+    RAG_USE_STUB: bool = os.getenv("RAG_USE_STUB", "false").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = True
