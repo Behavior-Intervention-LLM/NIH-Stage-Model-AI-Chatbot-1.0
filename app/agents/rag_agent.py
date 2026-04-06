@@ -181,13 +181,7 @@ class RAGAgent(BaseAgent):
             },
             confidence=0.0,
             analysis="RAG disabled",
-            actions=[
-                ToolCall(
-                    tool_name="rag_retrieval",
-                    tool_args={"query": user_message},
-                    output=[]
-                )
-            ]
+            actions=[] 
         )
         msg = user_message.lower()
         intent = state.slots.extracted_features.get("intent_payload", {}) or {}
