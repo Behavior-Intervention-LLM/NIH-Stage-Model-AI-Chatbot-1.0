@@ -51,6 +51,24 @@ class ChatGraphState(TypedDict, total=False):
     react_last_planned_tools: int
     tool_results_count: int
 
+class _StubRAGAgent(BaseAgent):
+    """No-op RAG: skips retrieval and emits no tool calls (tests intent/stage/responder without vector DB)."""
+    def __init__(self):
+        super().__init__("RAGAgent")
+    def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
+        return AgentOutput(
+            decision={
+                "rag_invoked": False,
+                "strategy": "stub_noop",
+                "results_found": 0,
+            },
+            confidence=0.5,
+            analysis="RAG stub: retrieval skipped",
+            actions=[],
+        )
+    def update_state(self, state: SessionState, output: AgentOutput):
+        state.slots.extracted_features.pop("retrieved_context", None)
+
 
 class Orchestrator:
     """LangGraph fixed path: load_state → intent → stage → RAG (plan + run tools) → responder → finalize."""
@@ -58,7 +76,8 @@ class Orchestrator:
     def __init__(self, tool_registry: Optional[ToolRegistry] = None):
         self.agents: Dict[str, BaseAgent] = {
             "intent_agent": IntentAgent(),
-            "rag_agent": RAGAgent(),
+            # "rag_agent": RAGAgent(),
+            "rag_agent": _StubRAGAgent(),
             "stage_agent": StageAgent(),
             # "planner_agent": PlannerAgent(),
             # "mechanism_coach_agent": MechanismCoachAgent(),
