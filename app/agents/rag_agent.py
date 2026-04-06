@@ -183,6 +183,7 @@ class RAGAgent(BaseAgent):
             analysis="RAG disabled",
             actions=[] 
         )
+    
         msg = user_message.lower()
         intent = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_label = str(intent.get("intent_label", "general_qa"))
