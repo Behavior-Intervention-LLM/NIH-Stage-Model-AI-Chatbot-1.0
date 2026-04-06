@@ -6,8 +6,10 @@ from app.core.types import Message
 
 
 class Guardrails:
-    """"""
-    
+    """
+    Checking of message prompt
+    """
+    # What is max length (string length?)
     MAX_MESSAGE_LENGTH = 5000
     MAX_RESPONSE_LENGTH = 2000
     FORBIDDEN_PATTERNS = [
@@ -31,6 +33,8 @@ class Guardrails:
         
         return True, None
     
+
+    # What is happening here
     @classmethod
     def sanitize_response(cls, response: str) -> str:
         """Sanitize response"""

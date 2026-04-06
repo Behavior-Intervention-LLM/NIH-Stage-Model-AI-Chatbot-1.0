@@ -8,7 +8,6 @@ from app.logging_config import logger
 from app.core.types import ChatRequest, ChatResponse
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
-from app.tools import tool_registry
 
 #  FastAPI 
 app = FastAPI(
@@ -26,12 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Orchestrator
 orchestrator = Orchestrator()
-
-# Orchestrator
-orchestrator.tool_registry = tool_registry
-
 
 
 # 
@@ -41,7 +35,7 @@ async def root():
     return {
         "message": "NIH Stage Model AI Chatbot API",
         "version": settings.API_VERSION,
-        "tools": tool_registry.list_tools()
+        "orchestration": "intent → stage → rag_agent → responder",
     }
 
 

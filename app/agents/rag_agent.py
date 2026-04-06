@@ -103,13 +103,22 @@ class RAGAgent(BaseAgent):
 
         # Step 2: Vector search (broad recall)
         # In v1.17.0+, .query() is the preferred high-level method
-        response = self.qdrant.query(
+
+        # modified here (xinai)
+        results = self.qdrant.search(
             collection_name=self.collection_name,
-            query_vector=query_vector,  # Use 'query_vector' for the embedding
+            query_vector=query_vector,
             limit=40,
-            with_payload=True
+            with_payload=True,
         )
-        results = response
+
+        # response = self.qdrant.query(
+        #     collection_name=self.collection_name,
+        #     query_vector=query_vector,  # Use 'query_vector' for the embedding
+        #     limit=40,
+        #     with_payload=True
+        # )
+        # results = response
 
         # Step 3: Build passages (TEXT + KEYWORDS)
         passages = [
