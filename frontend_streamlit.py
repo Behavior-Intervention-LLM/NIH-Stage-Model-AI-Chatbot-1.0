@@ -334,8 +334,8 @@ def render_workflow_cards():
     for col, (value, title, subtitle) in zip(cols, options):
         with col:
             is_active = st.session_state.selected_workflow == value
-            if is_active:
-                st.markdown("`Selected`")
+            # if is_active:
+            #     st.markdown("`Selected`")
             if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
                 st.session_state.selected_workflow = value
                 st.rerun()
