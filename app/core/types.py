@@ -95,6 +95,8 @@ class ToolCall(BaseModel):
     tool_name: str
     tool_args: Dict[str, Any]
     success_criteria: Optional[str] = None
+    # Tool/runtime result (e.g. RAG chunks); optional until after execution
+    output: Optional[Any] = None
 
 
 class AgentOutput(BaseModel):
