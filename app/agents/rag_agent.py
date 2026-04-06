@@ -185,7 +185,7 @@ class RAGAgent(BaseAgent):
                 ToolCall(
                     tool_name="rag_retrieval",
                     tool_args={"query": user_message},
-                    output=[]   # 👈 关键：返回空列表
+                    output=[]
                 )
             ]
         )
