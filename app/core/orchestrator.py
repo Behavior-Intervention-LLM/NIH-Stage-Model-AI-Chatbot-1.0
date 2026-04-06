@@ -23,6 +23,7 @@ from app.tools.base import ToolRegistry
 
 
 
+# Most important class
 class ChatGraphState(TypedDict, total=False):
     session_id: str
     user_message: str
@@ -30,7 +31,7 @@ class ChatGraphState(TypedDict, total=False):
     uploaded_context_text: Optional[str]
     state: SessionState
     context: str
-    pending_tool_calls: List[ToolCall]
+    pending_tool_calls: List[ToolCall] # At the moment maybe not necessary
     called_agents: List[str]
     last_output: AgentOutput
     reply: str
@@ -44,6 +45,8 @@ class ChatGraphState(TypedDict, total=False):
     intent_workflow: str
     stage_result: Optional[str]
     stage_confidence: float
+    
+    # When is this happening
     # structured ReAct loop controls
     react_step: int
     max_react_steps: int
@@ -76,10 +79,10 @@ class Orchestrator:
         graph.add_node("intent", self._intent)
         graph.add_node("stage_reason", self._stage_reason)
         graph.add_node("planner", self._planner)
-        graph.add_node("mechanism_coach", self._mechanism_coach)
-        graph.add_node("study_builder", self._study_builder)
-        graph.add_node("measure_finder", self._measure_finder)
-        graph.add_node("grant_partner", self._grant_partner)
+        # graph.add_node("mechanism_coach", self._mechanism_coach)
+        # graph.add_node("study_builder", self._study_builder)
+        # graph.add_node("measure_finder", self._measure_finder)
+        # graph.add_node("grant_partner", self._grant_partner)
         graph.add_node("guardrails", self._guardrails)
         graph.add_node("rag_plan", self._rag_plan)
         graph.add_node("run_tools", self._run_tools)
@@ -114,10 +117,10 @@ class Orchestrator:
         )
 
         graph.add_edge("planner", "rag_plan")
-        graph.add_edge("mechanism_coach", "guardrails")
-        graph.add_edge("study_builder", "guardrails")
-        graph.add_edge("measure_finder", "guardrails")
-        graph.add_edge("grant_partner", "guardrails")
+        # graph.add_edge("mechanism_coach", "guardrails")
+        # graph.add_edge("study_builder", "guardrails")
+        # graph.add_edge("measure_finder", "guardrails")
+        # graph.add_edge("grant_partner", "guardrails")
         graph.add_edge("guardrails", "rag_plan")
         graph.add_edge("rag_plan", "run_tools")
         graph.add_edge("run_tools", "react_judge")
@@ -518,6 +521,8 @@ class Orchestrator:
             "react_last_planned_tools": planned_now,
         }
 
+
+    # Agents
     def _run_tools(self, gstate: ChatGraphState) -> ChatGraphState:
         state = gstate["state"]
         pending = gstate.get("pending_tool_calls", [])

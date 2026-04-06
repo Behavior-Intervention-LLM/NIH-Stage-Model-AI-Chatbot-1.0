@@ -33,6 +33,8 @@ orchestrator = Orchestrator()
 orchestrator.tool_registry = tool_registry
 
 
+
+# 
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -62,6 +64,7 @@ async def chat(request: ChatRequest):
     """
     try:
         # 1. Validate message
+        # Check if this section is required
         is_valid, error_msg = Guardrails.validate_message(request.message)
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)

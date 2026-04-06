@@ -318,30 +318,30 @@ def render_thinking_trace(debug_info: dict):
     )
 
 
-# def render_workflow_cards():
-#     st.markdown("### Guided Workflows")
-#     st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
+def render_workflow_cards():
+    # st.markdown("### Guided Workflows")
+    # st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
 
-#     options = [
-#         ("auto", "🧠 Auto", "Intent-driven routing"),
-#         ("mechanism_coach", "🧬 Mechanism Coach", "Mechanism ranking + validation"),
-#         ("study_builder", "🧱 Study Builder", "Stage-specific design matrix"),
-#         ("grant_partner", "📝 Grant Partner", "Specific aims + reviewer critique"),
-#         ("measure_finder", "📏 Measure Finder", "Construct-to-measure shortlist"),
-#     ]
+    options = [
+        ("auto", "Auto", "Intent-driven routing"),
+        ("mechanism_coach", "Mechanism Coach", "Mechanism ranking + validation"),
+        ("study_builder", "Study Builder", "Stage-specific design matrix"),
+        ("grant_partner", "Grant Partner", "Specific aims + reviewer critique"),
+        ("measure_finder", "Measure Finder", "Construct-to-measure shortlist"),
+    ]
 
-#     cols = st.columns(len(options))
-#     for col, (value, title, subtitle) in zip(cols, options):
-#         with col:
-#             is_active = st.session_state.selected_workflow == value
-#             if is_active:
-#                 st.markdown("`Selected`")
-#             if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
-#                 st.session_state.selected_workflow = value
-#                 st.rerun()
-#             st.caption(subtitle)
+    cols = st.columns(len(options))
+    for col, (value, title, subtitle) in zip(cols, options):
+        with col:
+            is_active = st.session_state.selected_workflow == value
+            if is_active:
+                st.markdown("`Selected`")
+            if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
+                st.session_state.selected_workflow = value
+                st.rerun()
+            st.caption(subtitle)
 
-#     st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
+    # st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
 
 
 with st.sidebar:

@@ -72,7 +72,7 @@ class SessionState(BaseModel):
     session_id: str
     messages: List[Message] = Field(default_factory=list)  #  N （）
     summary: Optional[str] = None  # （）
-    slots: StageSlots = Field(default_factory=StageSlots)
+    slots: StageSlots = Field(default_factory=StageSlots) # If you ask about the stage, reminder of what stage is in
     artifacts: List[Artifact] = Field(default_factory=list)  # tool 
     last_route: Optional[str] = None  #  router （ debug）
     created_at: datetime = Field(default_factory=datetime.now)
@@ -164,11 +164,12 @@ class ToolResult(BaseModel):
 
 # ==================== API / ====================
 
+# Intent section not done through intent agent
 class ChatRequest(BaseModel):
     """Chat request"""
     session_id: Optional[str] = None
     message: str
-    workflow: Optional[Literal["auto", "navigator", "mechanism_coach", "study_builder", "measure_finder", "grant_partner"]] = None
+    workflow: Optional[Literal["auto", "navigator", "mechanism_coach", "study_builder", "measure_finder", "grant_partner"]] = None # The intent is here, do we need intent agent
     document_text: Optional[str] = None  # optional：
 
 
