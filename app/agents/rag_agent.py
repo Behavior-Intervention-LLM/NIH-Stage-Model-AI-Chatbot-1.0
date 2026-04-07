@@ -172,19 +172,13 @@ class RAGAgent(BaseAgent):
     # MAIN RUN
     # -------------------------
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
-
         return AgentOutput(
-            decision={
-                "rag_invoked": False,
-                "strategy": "disabled",
-                "results_found": 0
-            },
+            decision={"rag_invoked": False, "strategy": "disabled", "results_found": 0},
             confidence=0.0,
             analysis="RAG disabled",
-            actions=[] 
+            actions=[]
         )
-    
-        msg = user_message.lower()
+
         intent = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_label = str(intent.get("intent_label", "general_qa"))
 
@@ -212,8 +206,7 @@ class RAGAgent(BaseAgent):
             actions=[
                 ToolCall(
                     tool_name="rag_retrieval",
-                    tool_args={"query": search_query},
-                    output=docs
+                    tool_args={"query": search_query, "results": docs},
                 )
             ]
         )

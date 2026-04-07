@@ -87,6 +87,8 @@ class LLMClient:
         api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY
         if not api_key:
             raise ValueError("OPENAI_API_KEY is not set.")
+        else:
+            print(f"OAI key set: {api_key[:8]}...")
         base_url = (settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
         payload = {
             "model": self.model,
