@@ -1,9 +1,5 @@
 """
-<<<<<<< HEAD
 LLM client supporting Ollama (local), Anthropic, and OpenAI.
-=======
-LLM （ Ollama，）
->>>>>>> 9bf1842 (initial commit)
 """
 import json
 import re
@@ -16,11 +12,7 @@ from app.config import settings
 
 
 class LLMClient:
-<<<<<<< HEAD
     """Unified LLM client. Parses JSON from model output when needed."""
-=======
-    """ LLM ， JSON """
->>>>>>> 9bf1842 (initial commit)
 
     def __init__(self):
         self.provider = settings.LLM_PROVIDER.lower()
@@ -36,7 +28,6 @@ class LLMClient:
             return None
 
         if self.provider == "ollama":
-<<<<<<< HEAD
             return self._call_ollama(system_prompt, user_prompt)
 
         if self.provider == "anthropic":
@@ -144,30 +135,6 @@ class LLMClient:
         data = response.json()
         return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
-=======
-            payload = {
-                "model": self.model,
-                "stream": False,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "options": {
-                    "temperature": settings.LLM_TEMPERATURE,
-                },
-            }
-            response = requests.post(
-                f"{self.ollama_base_url}/api/chat",
-                json=payload,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("message", {}).get("content", "").strip()
-
-        return None
-
->>>>>>> 9bf1842 (initial commit)
     def chat_json(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
         """
         output JSON，。
