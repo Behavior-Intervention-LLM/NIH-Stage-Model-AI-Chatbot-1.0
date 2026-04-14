@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # LLM_PROVIDER: "ollama" (local) | "anthropic" | "openai" | "groq"
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5.4-mini")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5.4")
     LLM_API_KEY: Optional[str] = os.getenv("LLM_API_KEY")
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 2000
