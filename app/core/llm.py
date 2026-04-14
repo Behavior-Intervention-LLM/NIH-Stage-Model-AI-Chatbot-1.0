@@ -8,6 +8,7 @@ LLM （ Ollama，）
 import json
 import re
 from typing import Any, Dict, Optional
+from openai import OpenAI
 
 import requests
 
@@ -26,13 +27,9 @@ class LLMClient:
         self.model = settings.LLM_MODEL
         self.timeout = settings.LLM_TIMEOUT_SECONDS
         self.ollama_base_url = settings.OLLAMA_BASE_URL.rstrip("/")
-
+    
     def is_enabled(self) -> bool:
-<<<<<<< HEAD
-        return self.provider in {"ollama", "anthropic", "openai"}
-=======
-        return self.provider in {"ollama"}
->>>>>>> 9bf1842 (initial commit)
+        return self.provider in {"ollama", "anthropic", "openai", "groq"}
 
     def chat_text(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         if not self.is_enabled():
@@ -48,7 +45,34 @@ class LLMClient:
         if self.provider == "openai":
             return self._call_openai(system_prompt, user_prompt)
 
+        if self.provider == "groq":
+            return self._call_groq(system_prompt, user_prompt)
+
         return None
+
+    def _call_openai(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+
+        api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is not set.")
+        else:
+            print(f"OAI key set: {api_key[:8]}...")
+        
+        client = OpenAI(api_key=api_key)
+
+        response = client.chat.completions.create(
+            model=self.model,
+            temperature=settings.LLM_TEMPERATURE,
+            max_completion_tokens=settings.LLM_MAX_TOKENS,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+
+        return response.choices[0].message.content.strip()
+
+
 
     def _call_ollama(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         payload = {
@@ -93,13 +117,13 @@ class LLMClient:
         data = response.json()
         return data.get("content", [{}])[0].get("text", "").strip()
 
-    def _call_openai(self, system_prompt: str, user_prompt: str) -> Optional[str]:
-        api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY
+    def _call_groq(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        api_key = settings.GROQ_API_KEY
         if not api_key:
-            raise ValueError("OPENAI_API_KEY is not set.")
-        base_url = (settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
+            raise ValueError("GROQ_API_KEY is not set.")
+        model = settings.GROQ_MODEL
         payload = {
-            "model": self.model,
+            "model": model,
             "temperature": settings.LLM_TEMPERATURE,
             "max_tokens": settings.LLM_MAX_TOKENS,
             "messages": [
@@ -108,7 +132,7 @@ class LLMClient:
             ],
         }
         response = requests.post(
-            f"{base_url}/chat/completions",
+            "https://api.groq.com/openai/v1/chat/completions",
             json=payload,
             headers={
                 "Authorization": f"Bearer {api_key}",
