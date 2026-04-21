@@ -390,7 +390,16 @@ class Orchestrator:
         user_message = gstate["user_message"]
         context = gstate["context"]
 
-        out = self.agents["rag_agent"].run(state, user_message, context)
+        stage_result = gstate.get("stage_result")
+        stage_confidence = float(gstate.get("stage_confidence") or 0.0)
+
+        out = self.agents["rag_agent"].run(
+            state,
+            user_message,
+            context,
+            stage_result=stage_result,
+            stage_confidence=stage_confidence
+        )
         self.agents["rag_agent"].update_state(state, out)
 
         pending = list(gstate.get("pending_tool_calls", []))
@@ -400,51 +409,62 @@ class Orchestrator:
             planned_now = len(out.actions)
 
         self._add_agent(gstate, "rag_agent", out)
-        self._trace(
-            gstate,
-            {
-                "kind": "react",
-                "name": "plan",
-                "step": 1,
-                "planned_tools": planned_now,
-                "analysis": "RAG planning generated tool actions",
-            },
-        )
+        self._trace(gstate, {
+            "kind": "react",
+            "name": "plan",
+            "step": 1,
+            "planned_tools": planned_now,
+            "analysis": "RAG planning generated tool actions",
+        })
 
         count = 0
         for tool_call in pending:
             try:
-                artifact = self.tool_registry.run_tool(tool_call.tool_name, tool_call.tool_args)
-                state.artifacts.append(artifact)
-                count += 1
-                self._trace(
-                    gstate,
-                    {
+                # Handle rag_retrieval directly — results already in tool_call.output
+                if tool_call.tool_name == "rag_retrieval":
+                    docs = tool_call.output or []
+                    state.slots.extracted_features["retrieved_context"] = docs
+                    count += 1
+                    self._trace(gstate, {
+                        "kind": "tool",
+                        "name": "rag_retrieval",
+                        "success": True,
+                        "sources": [
+                            d.get("metadata", {}).get("pmcid", "unknown")
+                            for d in docs[:3]
+                        ],
+                    })
+                else:
+                    # All other tools still go through the registry
+                    artifact = self.tool_registry.run_tool(tool_call.tool_name, tool_call.tool_args)
+                    state.artifacts.append(artifact)
+                    count += 1
+                    self._trace(gstate, {
                         "kind": "tool",
                         "name": tool_call.tool_name,
                         "success": artifact.metadata.get("success", True),
                         "sources": [c.source for c in artifact.citations[:3]],
-                    },
-                )
+                    })
+
             except Exception as exc:
                 gstate["debug_info"][f"tool_error_{tool_call.tool_name}"] = str(exc)
-                self._trace(
-                    gstate,
-                    {"kind": "tool", "name": tool_call.tool_name, "success": False, "error": str(exc)},
-                )
+                self._trace(gstate, {
+                    "kind": "tool",
+                    "name": tool_call.tool_name,
+                    "success": False,
+                    "error": str(exc)
+                })
 
-        gstate["debug_info"]["tools_called"] = len(state.artifacts)
-        self._trace(
-            gstate,
-            {
-                "kind": "react",
-                "name": "observe",
-                "step": 1,
-                "executed_tools": len(pending),
-                "successful_results": count,
-                "analysis": "Tool observations stored as artifacts",
-            },
-        )
+        gstate["debug_info"]["tools_called"] = count
+        self._trace(gstate, {
+            "kind": "react",
+            "name": "observe",
+            "step": 1,
+            "executed_tools": len(pending),
+            "successful_results": count,
+            "analysis": "Tool observations stored as artifacts",
+        })
+
         return {
             **gstate,
             "state": state,
@@ -453,7 +473,6 @@ class Orchestrator:
             "react_last_planned_tools": planned_now,
             "tool_results_count": count,
         }
-
     # Legacy standalone node (main graph now inlines tool execution in _rag_plan; logic moved above).
     # def _run_tools(self, gstate: ChatGraphState) -> ChatGraphState:
     #     state = gstate["state"]

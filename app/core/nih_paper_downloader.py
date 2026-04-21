@@ -10,6 +10,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 import xml.etree.ElementTree as ET
 import nltk
 import numpy as np
+from pathlib import Path
 from sentence_transformers import util
 
 # Download the sentence tokenizer model (only needs to run once)
@@ -17,7 +18,7 @@ nltk.download('punkt', quiet=True)
 
 # --- 1. Load Configurations ---
 # Load secrets from your custom named env file
-load_dotenv(os.path.join(os.path.dirname(__file__), "qdrant.env"))
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 config = configparser.ConfigParser()
 config.read(os.path.join(os.path.dirname(__file__), "config.ini"))
@@ -43,10 +44,10 @@ EMBEDDING_MODEL         = config["EMBEDDING"]["model"]
 EMBEDDING_DIM           = int(config["EMBEDDING"]["dim"])
 EMBEDDING_BATCH_SIZE    = int(config["EMBEDDING"]["batch_size"])
 
-# Qdrant Cloud Credentials (from qdrant.env)
+# Qdrant Cloud Credentials (from .env)
 Q_URL = os.getenv("QDRANT_URL")
 Q_KEY = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = "nih_stage_model"
+COLLECTION_NAME = "nih_stage_model_test"
 
 GPU_DEVICE = "mps" #Can CUDA for RTX 3080, A100, etc.
 
@@ -277,7 +278,7 @@ def semantic_chunk_text(text: str, embedder, percentile_threshold: int = 15, max
         chunks.append(" ".join(current_chunk))
 
     # 6. Final filter for minimum length
-    return [c for c in chunks if len(c.strip()) > 100]
+    return [c for c in chunks if len(c.strip()) > 500]
 
 # --- Step 7: Embed + upsert to Qdrant ---
 def upsert_paper(pmcid: str, chunks: list[str], metadata: dict, source: str = "case_study"):

@@ -86,6 +86,21 @@ class ResponderAgent(BaseAgent):
         evidence_sources: List[str] = []
         citations = []
 
+        # 1. NEW: Check extracted_features for RAG data
+        xf = state.slots.extracted_features
+        rag_docs = xf.get("retrieved_context") or xf.get("context")
+        
+        if isinstance(rag_docs, list):
+            for doc in rag_docs:
+                # Use the 'text' and 'metadata' keys we cleaned up in RAGAgent
+                text = doc.get("text", "")
+                pmcid = doc.get("metadata", {}).get("pmcid", "unknown")
+                
+                if text:
+                    evidence_lines.append(text)
+                if pmcid not in evidence_sources:
+                    evidence_sources.append(pmcid)
+
         for artifact in state.artifacts[-8:]:
             if artifact.citations:
                 citations.extend(artifact.citations)
