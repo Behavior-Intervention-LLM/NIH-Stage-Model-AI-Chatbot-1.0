@@ -52,7 +52,7 @@ class RAGAgent(BaseAgent):
 
         # --- Vector DB (Initialize as None, set in try block) ---
         self.qdrant = None
-        self.collection_name = "nih_stage_model_test"
+        self.collection_name = "nih_stage_model_main"
         self.qdrant_available = False
         
         try:

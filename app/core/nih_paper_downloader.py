@@ -47,7 +47,7 @@ EMBEDDING_BATCH_SIZE    = int(config["EMBEDDING"]["batch_size"])
 # Qdrant Cloud Credentials (from .env)
 Q_URL = os.getenv("QDRANT_URL")
 Q_KEY = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = "nih_stage_model_test"
+COLLECTION_NAME = "nih_stage_model_main"
 
 GPU_DEVICE = "mps" #Can CUDA for RTX 3080, A100, etc.
 
