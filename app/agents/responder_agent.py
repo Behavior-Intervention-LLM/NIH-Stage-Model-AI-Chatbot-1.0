@@ -15,34 +15,35 @@ class ResponderAgent(BaseAgent):
     """Response generation agent."""
 
     _FALLBACK_SECTIONS = {
-        "system_definition": (
-            "Use retrieval evidence to support or refine your answer, "
-            "but do not restrict your answer only to the provided snippets. "
-            "If the retrieved evidence is incomplete, provide the best complete answer from your general knowledge "
-            "and note that the snippet is incomplete."
-        ),
+        # "system_definition": (
+        #     "Use retrieval evidence to support or refine your answer, "
+        #     "but do not restrict your answer only to the provided snippets. "
+        #     "If the retrieved evidence is incomplete, provide the best complete answer from your general knowledge "
+        #     "and note that the snippet is incomplete."
+        # ),
 
         "system_general": (
-            "You are an NIH Stage Model assistant. Synthesize a single clear answer for the user.\n"
-            "Use every relevant fact in the CONTEXT block below (stage, confidence, workflow outputs, RAG snippets, "
-            "missing info, guardrails). Do not dump raw field names or imitate an internal execution trace.\n"
+            "You are a chatbot designed for users to help with any and all information pertaining to Behavioral Science Intervention Methodologies. Your responses should align well and closely with the philosophies and pillars of foundation of the National Institute of Health",
+            "Use relevant facts in the CONTEXT block below (stage, confidence, workflow outputs, RAG snippets when answering"
+            "If there is any missing info, do not dump raw field names or imitate an internal execution trace.\n"
             "If stage confidence is low or stage is unknown, say so plainly and ask focused follow-ups.\n"
             "If retrieval evidence exists, ground claims briefly (sources or quotes as appropriate).\n"
             "Match the user's language when obvious. Output plain text only (no JSON)."
         ),
+        
         "user_instruction_definition": (
             "Provide: (1) number of stages, (2) stage names, and (3) one-line description per stage."
         ),
     }
 
     STAGE_INFO = {
-        "0": "Stage 0 focuses on basic research, mechanism discovery, and hypothesis building.",
-        "I": "Stage I focuses on feasibility testing, intervention refinement, and manualization.",
-        "II": "Stage II focuses on efficacy testing and mechanism validation, often with randomized controlled designs.",
-        "III": "Stage III focuses on effectiveness in real-world and diverse settings.",
-        "IV": "Stage IV focuses on implementation, dissemination, and scale-up.",
-        "V": "Stage V focuses on sustainability and long-term maintenance.",
-    }
+            "0": "Stage 0 involves basic science that occurs prior to intervention development, but is relevant (ultimately translatable) to intervention development. Research on mechanisms of change is an integral part of all other stages of intervention development, involving basic science questions about behavior change within the context of intervention development studies.",
+            "1": "Stage I encompasses all activities related to the creation and preliminary testing of a new behavioral intervention, including generation of new interventions as well as modification, adaptation, or refinement of existing interventions (Stage IA), culminating in feasibility and pilot testing (Stage IB). Stage I can also include modification of an intervention for implementability, development of training materials, and may be conducted in research or community settings.",
+            "2": "Stage II (Pure Efficacy) consists of experimental testing of promising behavioral interventions in research settings, with research-based providers.",
+            "3": "Stage III (Real World Efficacy) consists of experimental testing of promising behavioral interventions in community settings, with community-based providers or caregivers, while maintaining a high level of control necessary to establish internal validity. This is sometimes referred to as a hybrid efficacy-effectiveness stage.",
+            "4": "Stage IV (Effectiveness) examines empirically supported behavioral interventions in community settings, with community-based providers or caregivers, while maximizing external validity.",
+            "5": "Stage V (Implementation and Dissemination) examines strategies of implementation and adoption of empirically supported interventions in community settings.",
+        }
 
     def __init__(self):
         super().__init__("ResponderAgent")

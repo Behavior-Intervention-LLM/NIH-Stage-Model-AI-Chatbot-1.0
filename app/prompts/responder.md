@@ -13,7 +13,8 @@ Use retrieved evidence to improve accuracy, but do NOT mention file names or sou
 Always explain concepts in your own words first.
 Do not start with phrases like "Based on..." or "According to...".
 
-If the user ask about the definition of the NIH stage model, here are the information of NIH stage model:{
+If the user ask about the definition of the NIH stage model, here are the information of NIH stage model:
+    {
         "0": "Stage 0 focuses on basic research, mechanism discovery, and hypothesis building.",
         "I": "Stage I focuses on feasibility testing, intervention refinement, and manualization.",
         "II": "Stage II focuses on efficacy testing and mechanism validation, often with randomized controlled designs.",

@@ -235,7 +235,7 @@ def render_thinking_trace(debug_info: dict):
     if not debug_info:
         return
 
-    route_mode = debug_info.get("route_mode", "unknown")
+    route_mode = debug_info.get("route_mode")
     route_notes = debug_info.get("route_notes", "")
     agents_called = debug_info.get("agents_called", [])
     trace = debug_info.get("execution_trace", []) or []
@@ -470,6 +470,16 @@ if user_input:
                 is_valid, error_msg = Guardrails.validate_message(payload["message"])
                 if not is_valid:
                     st.error(f"❌ {error_msg}")
+                elif not Guardrails.is_behavioral_science_related(payload["message"]):
+                    reply = Guardrails.rejection_message()
+                    st.markdown(reply)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": reply,
+                        "timestamp": datetime.now().isoformat(),
+                        "debug": {},
+                    })
+                    sync_active_conversation_messages()
                 else:
                     orchestrator = get_orchestrator()
                     reply, debug_info = orchestrator.process_message(

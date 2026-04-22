@@ -13,12 +13,10 @@ class IntentAgent(BaseAgent):
     """Intent recognition and request extraction agent."""
 
     INTENT_LABELS = Literal[
-        "stage_guidance",
-        "general_qa",
-        "chit_chat",
-        "admin",
-        "debug",
-        "unknown",
+        "stage_identification",
+        "general_question_and_answer",
+        "behavioral_intervention_related",
+        "non-behavioral_intervention_related",
     ]
 
     def __init__(self):

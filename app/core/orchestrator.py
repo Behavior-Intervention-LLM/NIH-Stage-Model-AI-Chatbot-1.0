@@ -91,23 +91,15 @@ class Orchestrator:
 
         graph.add_edge(START, "load_state")
         graph.add_edge("load_state", "intent")
-        graph.add_edge("intent", "stage_reason")
+        graph.add_conditional_edges(
+            "intent",
+            self._route_after_intent,
+            {
+                "stage_reason": "stage_reason",
+                "rag_plan": "rag_plan",
+            },
+        )
         graph.add_edge("stage_reason", "rag_plan")
-
-        # graph.add_conditional_edges(
-        #     "intent",
-        #     self._route_after_intent,
-        #     {
-        #         "stage_reason": "stage_reason",
-        #     },
-        # )
-        # graph.add_conditional_edges(
-        #     "stage_reason",
-        #     self._route_after_stage,
-        #     {
-        #         "rag_plan": "rag_plan",
-        #     },
-        # )
 
         # graph.add_edge("planner", "rag_plan")
         # graph.add_edge("mechanism_coach", "guardrails")
@@ -258,23 +250,27 @@ class Orchestrator:
             "intent_workflow": str(decision.get("workflow", "navigator")).lower(),
         }
 
-    # Legacy: conditional_edges(intent); replaced with a direct intent -> stage_reason edge.
-    # def _route_after_intent(self, gstate: ChatGraphState) -> str:
-    #     gstate["intent_workflow"] = "navigator"
-    #     gstate["debug_info"].update(
-    #         {
-    #             "workflow_resolution": "simplified_pipeline",
-    #             "route_mode": "stage_flow",
-    #             "route_notes": "intent -> stage_reason (fixed)",
-    #             "workflow": "navigator",
-    #         }
-    #     )
-    #     return "stage_reason"
+    def _route_after_intent(self, gstate: ChatGraphState) -> str:
+        """Skip stage agent when stage classification is not needed."""
+        need_stage = self._as_bool(gstate.get("intent_need_stage"), default=False)
+        is_definition = self._as_bool(gstate.get("intent_is_definition"), default=False)
+        intent_label = str(gstate.get("intent_label", "unknown")).lower()
+
+        skip_stage = (
+            is_definition
+            or intent_label in {"chit_chat", "admin"}
+            or not need_stage
+        )
+        route = "rag_plan" if skip_stage else "stage_reason"
+        gstate["debug_info"]["stage_skipped"] = skip_stage
+        gstate["debug_info"]["route_after_intent"] = route
+        return route
 
     def _stage_reason(self, gstate: ChatGraphState) -> ChatGraphState:
         state = gstate["state"]
         user_message = gstate["user_message"]
-        context = gstate["context"]
+        # Stage agent only uses the first 1200 chars of context — no need to pass more.
+        context = gstate["context"][:1200]
 
         out = self.agents["stage_agent"].run(state, user_message, context)
         self.agents["stage_agent"].update_state(state, out)

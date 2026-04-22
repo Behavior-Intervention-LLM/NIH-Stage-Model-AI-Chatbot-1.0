@@ -68,7 +68,7 @@ class Artifact(BaseModel):
 # ====================  ====================
 
 class SessionState(BaseModel):
-    """（）"""
+    """"""
     session_id: str
     messages: List[Message] = Field(default_factory=list)  #  N （）
     summary: Optional[str] = None  # （）

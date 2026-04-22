@@ -57,11 +57,19 @@ async def chat(request: ChatRequest):
         ChatResponse: Chat response
     """
     try:
-        # 1. Validate message
-        # Check if this section is required
+        # 1. Validate message (length / XSS)
         is_valid, error_msg = Guardrails.validate_message(request.message)
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
+
+        # 1b. Topic enforcement — only answer behavioral science questions
+        if not Guardrails.is_behavioral_science_related(request.message):
+            reply = Guardrails.rejection_message()
+            return ChatResponse(
+                session_id=request.session_id or "default",
+                reply=reply,
+                debug=None,
+            )
 
         # 2. Process message
         reply, debug_info = orchestrator.process_message(
