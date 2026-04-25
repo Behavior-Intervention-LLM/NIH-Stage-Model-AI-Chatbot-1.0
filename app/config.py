@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     LLM_API_KEY: Optional[str] = os.getenv("LLM_API_KEY")
     LLM_TEMPERATURE: float = 0.3
-    LLM_MAX_TOKENS: int = 2000
+    LLM_MAX_TOKENS: int = 2048
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 
