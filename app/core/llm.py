@@ -1,25 +1,24 @@
 """
-LLM client supporting Ollama (local), Anthropic, and OpenAI.
+Unified LLM client supporting OpenAI, Anthropic, Ollama, and Groq.
 """
 import json
 import re
 from typing import Any, Dict, Optional
-from openai import OpenAI
 
 import requests
+from openai import OpenAI
 
 from app.config import settings
 
 
 class LLMClient:
-    """Unified LLM client. Parses JSON from model output when needed."""
+    """Single client for all supported LLM providers. Handles JSON parsing."""
 
     def __init__(self):
         self.provider = settings.LLM_PROVIDER.lower()
         self.model = settings.LLM_MODEL
         self.timeout = settings.LLM_TIMEOUT_SECONDS
-        self.ollama_base_url = settings.OLLAMA_BASE_URL.rstrip("/")
-    
+
     def is_enabled(self) -> bool:
         return self.provider in {"ollama", "anthropic", "openai", "groq"}
 
@@ -29,28 +28,21 @@ class LLMClient:
 
         if self.provider == "ollama":
             return self._call_ollama(system_prompt, user_prompt)
-
         if self.provider == "anthropic":
             return self._call_anthropic(system_prompt, user_prompt)
-
         if self.provider == "openai":
             return self._call_openai(system_prompt, user_prompt)
-
         if self.provider == "groq":
             return self._call_groq(system_prompt, user_prompt)
 
         return None
 
     def _call_openai(self, system_prompt: str, user_prompt: str) -> Optional[str]:
-
         api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY
         if not api_key:
             raise ValueError("OPENAI_API_KEY is not set.")
-        else:
-            print(f"OAI key set: {api_key[:8]}...")
-        
-        client = OpenAI(api_key=api_key)
 
+        client = OpenAI(api_key=api_key, base_url=settings.OPENAI_BASE_URL or None)
         response = client.chat.completions.create(
             model=self.model,
             temperature=settings.LLM_TEMPERATURE,
@@ -60,12 +52,10 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ],
         )
-
-        return response.choices[0].message.content.strip()
-
-
+        return (response.choices[0].message.content or "").strip()
 
     def _call_ollama(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         payload = {
             "model": self.model,
             "stream": False,
@@ -76,7 +66,7 @@ class LLMClient:
             "options": {"temperature": settings.LLM_TEMPERATURE},
         }
         response = requests.post(
-            f"{self.ollama_base_url}/api/chat",
+            f"{base_url}/api/chat",
             json=payload,
             timeout=self.timeout,
         )
@@ -87,7 +77,8 @@ class LLMClient:
         api_key = settings.ANTHROPIC_API_KEY or settings.LLM_API_KEY
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY is not set.")
-        model = settings.ANTHROPIC_MODEL if self.model == "qwen2.5:3b-instruct" else self.model
+
+        model = settings.ANTHROPIC_MODEL
         payload = {
             "model": model,
             "max_tokens": settings.LLM_MAX_TOKENS,
@@ -112,9 +103,9 @@ class LLMClient:
         api_key = settings.GROQ_API_KEY
         if not api_key:
             raise ValueError("GROQ_API_KEY is not set.")
-        model = settings.GROQ_MODEL
+
         payload = {
-            "model": model,
+            "model": settings.GROQ_MODEL,
             "temperature": settings.LLM_TEMPERATURE,
             "max_tokens": settings.LLM_MAX_TOKENS,
             "messages": [
@@ -136,20 +127,16 @@ class LLMClient:
         return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
     def chat_json(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
-        """
-        output JSON，。
-        """
+        """Call chat_text and parse the result as JSON."""
         raw = self.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
         if not raw:
             return None
 
-        # 1) 
         try:
             return json.loads(raw)
         except Exception:
             pass
 
-        # 2)  ```json ... ```
         fenced = re.search(r"```json\s*(\{.*?\})\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
         if fenced:
             try:
@@ -157,7 +144,6 @@ class LLMClient:
             except Exception:
                 pass
 
-        # 3)  {...}
         brace = re.search(r"(\{.*\})", raw, flags=re.DOTALL)
         if brace:
             try:
@@ -169,4 +155,3 @@ class LLMClient:
 
 
 llm_client = LLMClient()
-
