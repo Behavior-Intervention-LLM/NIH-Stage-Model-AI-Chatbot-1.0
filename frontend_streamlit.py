@@ -46,7 +46,13 @@ def _require_auth():
     if st.session_state.get("authenticated"):
         return
 
-    from auth import verify_login
+    from auth import seed_users_from_env, verify_login
+
+    # First-deploy bootstrap: creates accounts from SEED_USERS (Streamlit
+    # secrets or env) if set. No-op when unset or users already exist.
+    if not st.session_state.get("_seed_checked"):
+        seed_users_from_env()
+        st.session_state._seed_checked = True
 
     st.title("🔬 NIH Stage Model AI Chatbot")
     st.markdown("This tool is for authorized users only. Sign in to continue.")

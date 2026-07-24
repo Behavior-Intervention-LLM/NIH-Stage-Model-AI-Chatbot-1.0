@@ -30,4 +30,4 @@ boto3>=1.34.0
 # NIH paper downloader utility (uncomment if using nih_paper_downloader.py)
 # qdrant-client>=1.7.0
 # sentence-transformers>=2.6.0
-# nltk>=3.8.0
+# nltk>=3.8.0psycopg[binary]>=3.1

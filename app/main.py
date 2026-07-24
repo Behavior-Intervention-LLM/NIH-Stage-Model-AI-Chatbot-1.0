@@ -30,6 +30,12 @@ app.add_middleware(
 
 orchestrator = Orchestrator(tool_registry=tool_registry)
 
+# First-deploy bootstrap: creates accounts from SEED_USERS env var if set.
+if not settings.AUTH_DISABLED:
+    _seeded = user_auth.seed_users_from_env()
+    if _seeded:
+        logger.info(f"Seeded {len(_seeded)} user account(s) from SEED_USERS.")
+
 _bearer = HTTPBearer(auto_error=False)
 
 
