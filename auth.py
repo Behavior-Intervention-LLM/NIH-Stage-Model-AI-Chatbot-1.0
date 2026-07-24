@@ -50,6 +50,9 @@ MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_SECONDS = 300
 
 MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
+# Lowercase letters, digits, dot, underscore, hyphen; 3-32 chars.
+USERNAME_PATTERN = r"^[a-z0-9._-]{3,32}$"
 
 TOKEN_TTL_SECONDS = 12 * 3600
 
@@ -139,11 +142,19 @@ def _normalize_username(username: str) -> str:
 
 def create_user(username: str, password: str) -> None:
     """Create a user. Raises ValueError on invalid input or duplicate username."""
+    import re
+
     username = _normalize_username(username)
     if not username:
         raise ValueError("Username cannot be empty.")
+    if not re.match(USERNAME_PATTERN, username):
+        raise ValueError(
+            "Username must be 3-32 characters: letters, digits, dot, underscore, or hyphen."
+        )
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
 
     salt = secrets.token_bytes(SALT_BYTES)
     password_hash = _hash_password(password, salt)

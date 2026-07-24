@@ -46,7 +46,9 @@ def _require_auth():
     if st.session_state.get("authenticated"):
         return
 
-    from auth import seed_users_from_env, verify_login
+    import hmac as _hmac
+
+    from auth import create_user, seed_users_from_env, verify_login
 
     # First-deploy bootstrap: creates accounts from SEED_USERS (Streamlit
     # secrets or env) if set. No-op when unset or users already exist.
@@ -56,18 +58,51 @@ def _require_auth():
 
     st.title("🔬 NIH Stage Model AI Chatbot")
     st.markdown("This tool is for authorized users only. Sign in to continue.")
-    with st.form("login_form"):
-        username = st.text_input("Username", key="_auth_user")
-        password = st.text_input("Password", type="password", key="_auth_pw")
-        submitted = st.form_submit_button("Login", type="primary")
-    if submitted:
-        ok, msg = verify_login(username, password)
-        if ok:
-            st.session_state.authenticated = True
-            st.session_state.auth_username = username.strip()
-            st.rerun()
+
+    # Self-signup is disabled unless an invite code is configured.
+    signup_code = st.secrets.get("SIGNUP_CODE", os.environ.get("SIGNUP_CODE", ""))
+
+    login_tab, signup_tab = st.tabs(["Sign In", "Create Account"])
+
+    with login_tab:
+        with st.form("login_form"):
+            username = st.text_input("Username", key="_auth_user")
+            password = st.text_input("Password", type="password", key="_auth_pw")
+            submitted = st.form_submit_button("Login", type="primary")
+        if submitted:
+            ok, msg = verify_login(username, password)
+            if ok:
+                st.session_state.authenticated = True
+                st.session_state.auth_username = username.strip().lower()
+                st.rerun()
+            else:
+                st.error(msg)
+
+    with signup_tab:
+        if not signup_code:
+            st.info("Account creation is disabled. Contact the administrator for access.")
         else:
-            st.error(msg)
+            st.caption("You need an invite code from the administrator to create an account.")
+            with st.form("signup_form"):
+                new_username = st.text_input("Username (3-32 chars: a-z, 0-9, . _ -)")
+                new_password = st.text_input("Password (min 8 characters)", type="password")
+                confirm_password = st.text_input("Confirm password", type="password")
+                invite = st.text_input("Invite code", type="password")
+                signup_submitted = st.form_submit_button("Create Account", type="primary")
+            if signup_submitted:
+                if not _hmac.compare_digest(invite.strip(), signup_code):
+                    st.error("Invalid invite code.")
+                elif new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        create_user(new_username, new_password)
+                        st.session_state.authenticated = True
+                        st.session_state.auth_username = new_username.strip().lower()
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+
     st.stop()
 
 
@@ -364,6 +399,22 @@ with st.sidebar:
             st.session_state.authenticated = False
             st.session_state.auth_username = None
             st.rerun()
+        with st.expander("🔑 Change Password"):
+            with st.form("change_password_form"):
+                current_pw = st.text_input("Current password", type="password")
+                new_pw = st.text_input("New password", type="password")
+                confirm_pw = st.text_input("Confirm new password", type="password")
+                pw_submitted = st.form_submit_button("Update")
+            if pw_submitted:
+                from auth import change_password
+
+                if new_pw != confirm_pw:
+                    st.error("New passwords do not match.")
+                else:
+                    ok, msg = change_password(
+                        st.session_state.get("auth_username", ""), current_pw, new_pw
+                    )
+                    (st.success if ok else st.error)(msg)
     st.markdown("---")
 
     st.subheader("Conversations")
