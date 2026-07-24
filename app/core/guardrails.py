@@ -56,7 +56,8 @@ _REJECTION_MESSAGE = (
 
 class Guardrails:
     """Input validation, output sanitization, and topic enforcement."""
-
+    
+    # Arbitrary numbers?
     MAX_MESSAGE_LENGTH = 5000
     MAX_RESPONSE_LENGTH = 2000
     FORBIDDEN_PATTERNS = [
@@ -69,6 +70,7 @@ class Guardrails:
     # Input validation                                                     #
     # ------------------------------------------------------------------ #
 
+    # What are XSS patterns 
     @classmethod
     def validate_message(cls, message: str) -> tuple[bool, Optional[str]]:
         """Check length and XSS patterns."""

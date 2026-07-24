@@ -45,6 +45,7 @@ NIH_LLM/
 # Logs
 *.log
 logs/
+log.md
 
 # OS
 .DS_Store
@@ -57,6 +58,14 @@ qdrant.env
 # Local runtime storage
 local_storage/
 
+# User credentials database — never commit
+users.db
+
+# Stray local SQLite file (accidental duplicate of users.db schema)
+/db
+
 # Jupyter checkpoints
 .ipynb_checkpoints/
 notebook/
+
+TODO.md

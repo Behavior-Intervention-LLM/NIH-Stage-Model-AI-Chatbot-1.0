@@ -12,6 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+COPY auth.py .
 COPY data/ ./data/
 
 RUN mkdir -p data/documents data/vector_store local_storage

@@ -58,9 +58,9 @@ class Orchestrator:
 
     def __init__(self, tool_registry: Optional[ToolRegistry] = None):
         self.agents: Dict[str, BaseAgent] = {
-            "intent_agent": IntentAgent(),
-            "rag_agent": RAGAgent(),
+            "intent_agent": IntentAgent(), #identification of whether BIH related or not
             "stage_agent": StageAgent(),
+            "rag_agent": RAGAgent(),
             # "planner_agent": PlannerAgent(),
             # "mechanism_coach_agent": MechanismCoachAgent(),
             # "study_builder_agent": StudyBuilderAgent(),

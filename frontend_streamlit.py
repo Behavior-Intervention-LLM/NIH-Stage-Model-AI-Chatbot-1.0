@@ -37,31 +37,35 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Access Authentication
+# Access Authentication (users.db-backed, see auth.py)
 def _require_auth():
-    """Block access until a valid password is entered.
-    If APP_PASSWORD is not configured, access is open (local dev mode)."""
-    # expected = st.secrets.get("APP_PASSWORD", os.environ.get("APP_PASSWORD", ""))
-    expected = "password"
-    if not expected:
-        # No password set — open access (local development)
+    """Block access until valid credentials are entered.
+    Set AUTH_DISABLED=true to skip the gate (local dev mode only)."""
+    if os.environ.get("AUTH_DISABLED", "").lower() == "true":
         return
     if st.session_state.get("authenticated"):
         return
 
+    from auth import verify_login
+
     st.title("🔬 NIH Stage Model AI Chatbot")
-    st.markdown("This tool is for authorized users only. Enter the access password to continue.")
-    pw = st.text_input("Password", type="password", key="_auth_pw")
-    if st.button("Login", type="primary"):
-        if pw == expected:
+    st.markdown("This tool is for authorized users only. Sign in to continue.")
+    with st.form("login_form"):
+        username = st.text_input("Username", key="_auth_user")
+        password = st.text_input("Password", type="password", key="_auth_pw")
+        submitted = st.form_submit_button("Login", type="primary")
+    if submitted:
+        ok, msg = verify_login(username, password)
+        if ok:
             st.session_state.authenticated = True
+            st.session_state.auth_username = username.strip()
             st.rerun()
         else:
-            st.error("Incorrect password.")
+            st.error(msg)
     st.stop()
 
 
-# _require_auth()
+_require_auth()
 
 
 # What is happening here
@@ -323,29 +327,37 @@ def render_workflow_cards():
     # st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
 
     options = [
-        ("auto", "Auto", "Intent-driven routing"),
-        ("mechanism_coach", "Mechanism Coach", "Mechanism ranking + validation"),
-        ("study_builder", "Study Builder", "Stage-specific design matrix"),
-        ("grant_partner", "Grant Partner", "Specific aims + reviewer critique"),
-        ("measure_finder", "Measure Finder", "Construct-to-measure shortlist"),
+        ("auto", "Auto", "Intent-driven routing", True),
+        ("mechanism_coach", "Mechanism Coach", "Mechanism ranking + validation", False),
+        ("study_builder", "Study Builder", "Stage-specific design matrix", False),
+        ("grant_partner", "Grant Partner", "Specific aims + reviewer critique", False),
+        ("measure_finder", "Measure Finder", "Construct-to-measure shortlist", False),
     ]
 
     cols = st.columns(len(options))
-    for col, (value, title, subtitle) in zip(cols, options):
+    for col, (value, title, subtitle, enabled) in zip(cols, options):
         with col:
             is_active = st.session_state.selected_workflow == value
-            # if is_active:
-            #     st.markdown("`Selected`")
-            if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
-                st.session_state.selected_workflow = value
-                st.rerun()
-            st.caption(subtitle)
+            if enabled:
+                if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
+                    st.session_state.selected_workflow = value
+                    st.rerun()
+                st.caption(subtitle)
+            else:
+                st.button(title, key=f"workflow_{value}", use_container_width=True, disabled=True)
+                st.caption("🚧 In development")
 
     # st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
 
 
 with st.sidebar:
     st.title("🔬 NIH Stage Model")
+    if st.session_state.get("authenticated"):
+        st.caption(f"Signed in as **{st.session_state.get('auth_username', 'user')}**")
+        if st.button("🚪 Log Out", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.auth_username = None
+            st.rerun()
     st.markdown("---")
 
     st.subheader("Conversations")

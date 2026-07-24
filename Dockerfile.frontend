@@ -10,6 +10,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY frontend_streamlit.py .
+COPY auth.py .
 COPY app/ ./app/
 COPY data/ ./data/
 COPY .streamlit/ ./.streamlit/

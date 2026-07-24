@@ -40,17 +40,6 @@ python example_usage.py    # Example API usage
 
 All settings live in `app/config.py` (pydantic-settings, loaded from environment):
 
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `ollama` | LLM backend |
-| `LLM_MODEL` | `qwen2.5:3b-instruct` | Model name |
-| `LLM_TEMPERATURE` | `0.3` | Generation temp |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
-| `VECTOR_STORE_PATH` | `data/vector_store` | TF-IDF index location |
-| `DOCUMENTS_DIR` | `data/documents` | Source docs for RAG |
-| `SHORT_TERM_LIMIT` | `20` | Messages kept in session |
-| `SUMMARY_THRESHOLD` | `10` | When to summarize history |
-
 ## Architecture
 
 ### Overview
@@ -63,7 +52,7 @@ ChatResponse { reply, session_id, debug_trace? }
 ```
 
 ### LangGraph Orchestration (`app/core/orchestrator.py`)
-14-node state machine with conditional routing:
+(in-progress)-node state machine with conditional routing:
 
 ```
 load_state → intent → [route by intent]

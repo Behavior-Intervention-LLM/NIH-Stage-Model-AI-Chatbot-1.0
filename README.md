@@ -399,9 +399,7 @@ Configured in `app/config.py` (env-compatible):
 - `DOCUMENTS_DIR`
 
 Default local model stack:
-- Ollama
-- `qwen2.5:3b-instruct`
-
+OpenAI : GPT5.4
 ---
 
 ## 8) Local Run

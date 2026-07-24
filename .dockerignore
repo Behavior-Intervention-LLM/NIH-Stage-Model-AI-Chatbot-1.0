@@ -45,3 +45,7 @@ CLAUDE.md
 # OS
 .DS_Store
 Thumbs.db
+
+# User credentials DB (mounted as a volume at runtime, never baked into images)
+users.db
+db
