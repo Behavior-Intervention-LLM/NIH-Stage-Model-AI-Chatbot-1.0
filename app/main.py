@@ -11,6 +11,7 @@ from app.logging_config import logger
 from app.core.types import ChatRequest, ChatResponse
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
+from app.tools import tool_registry
 import auth as user_auth
 
 app = FastAPI(
@@ -27,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-orchestrator = Orchestrator()
+orchestrator = Orchestrator(tool_registry=tool_registry)
 
 _bearer = HTTPBearer(auto_error=False)
 

@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     LLM_API_KEY: Optional[str] = os.getenv("LLM_API_KEY")
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 2000
+    # Fast/cheap model for routing-style calls (intent classification).
+    # Falls back to LLM_MODEL when unset. OpenAI provider only.
+    # Must be a non-reasoning model — reasoning models (gpt-5* family) spend
+    # seconds thinking, which defeats the purpose for a routing classifier.
+    LLM_INTENT_MODEL: Optional[str] = os.getenv("LLM_INTENT_MODEL", "gpt-4.1-mini")
     LLM_TIMEOUT_SECONDS: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 
     # Ollama (local)

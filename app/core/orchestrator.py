@@ -28,6 +28,8 @@ class ChatGraphState(TypedDict, total=False):
     user_message: str
     workflow_override: Optional[str]
     uploaded_context_text: Optional[str]
+    # Optional callable(str) that receives responder text incrementally.
+    stream_handler: Optional[Any]
     state: SessionState
     context: str
     pending_tool_calls: List[ToolCall] # At the moment maybe not necessary
@@ -586,8 +588,13 @@ class Orchestrator:
         else:
             state.slots.extracted_features.pop("stage_uncertain_hint", None)
 
-        out = self.agents["responder_agent"].run(state, user_message, context)
-        self.agents["responder_agent"].update_state(state, out)
+        stream_handler = gstate.get("stream_handler")
+        responder = self.agents["responder_agent"]
+        if stream_handler is not None and hasattr(responder, "run_stream"):
+            out = responder.run_stream(state, user_message, context, stream_handler)
+        else:
+            out = responder.run(state, user_message, context)
+        responder.update_state(state, out)
         self._add_agent(gstate, "responder_agent", out)
 
         # Legacy four-workflow reply assembly (needs json and workflow_structured_output; off in simplified pipeline).
@@ -654,13 +661,17 @@ class Orchestrator:
         user_message: str,
         workflow_override: Optional[str] = None,
         uploaded_context_text: Optional[str] = None,
+        stream_handler: Optional[Any] = None,
     ) -> tuple[str, dict]:
+        """Run the graph. If stream_handler is given, it receives the final
+        response text incrementally (callable taking a str chunk)."""
         result = self._graph.invoke(
             {
                 "session_id": session_id,
                 "user_message": user_message,
                 "workflow_override": workflow_override,
                 "uploaded_context_text": uploaded_context_text,
+                "stream_handler": stream_handler,
             }
         )
         return result.get("reply", "I understand your question. Let me help you with that."), result.get("debug_info", {})

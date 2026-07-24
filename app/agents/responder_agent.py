@@ -177,54 +177,47 @@ class ResponderAgent(BaseAgent):
             )
         return self._run_with_rules(state, user_message)
 
-    def _run_with_llm(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput | None:
-        if not llm_client.is_enabled():
-            return None
-
+    def _build_llm_prompts(
+        self, state: SessionState, user_message: str, context: str = ""
+    ) -> tuple[str, str, List]:
+        """Build (system_prompt, user_prompt, citations) for the final response."""
         evidence_lines, evidence_sources, citations = self._collect_evidence(state)
 
         message_lower = user_message.lower().strip()
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_query_type = str(intent_payload.get("query_type", "")).lower()
 
-        # is_stage_definition_query = (intent_query_type == "definition")
-
         is_stage_definition_query = (
             any(k in message_lower for k in ["what is", "what's", "define", "how many stages", "number of stages", "list stages"])
             and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model"])
         ) or intent_query_type == "definition"
 
-        # stage_info_text = self._format_stage_info()
-
         sections = self._get_responder_sections()
+        system_prompt = sections["system_general"]
+        base_context = self._build_general_context(
+            state, user_message, context, evidence_lines, evidence_sources
+        )
 
         if is_stage_definition_query:
-            system_prompt = sections["system_general"]
-
-            # should be the part that concat responder.md
             user_tail = sections.get("user_instruction_definition") or self._FALLBACK_SECTIONS[
                 "user_instruction_definition"
             ]
-
-            base_context = self._build_general_context(
-                state, user_message, context, evidence_lines, evidence_sources
-            )
-            
             user_prompt = (
                 f"{base_context}\n\n"
-                # f"{stage_info_text}\n"
                 f"--- TASK INSTRUCTION ---\n"
                 f"{user_tail}\n"
             )
-
-            text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
-
         else:
-            system_prompt = sections["system_general"]
-            user_prompt = self._build_general_context(
-                state, user_message, context, evidence_lines, evidence_sources
-            )
-            text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
+            user_prompt = base_context
+
+        return system_prompt, user_prompt, citations
+
+    def _run_with_llm(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput | None:
+        if not llm_client.is_enabled():
+            return None
+
+        system_prompt, user_prompt, citations = self._build_llm_prompts(state, user_message, context)
+        text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
 
         if not text:
             return None
@@ -234,6 +227,42 @@ class ResponderAgent(BaseAgent):
             confidence=0.9,
             analysis="LLM generated final response",
             user_facing=text.strip(),
+            metadata={"citations": [c.model_dump() for c in citations]},
+        )
+
+    def run_stream(self, state: SessionState, user_message: str, context: str, on_chunk) -> AgentOutput:
+        """Like run(), but emits response text incrementally via on_chunk(str).
+        Returns the complete AgentOutput once the stream finishes."""
+        if not llm_client.is_enabled():
+            out = self._run_with_rules(state, user_message)
+            if out.user_facing:
+                on_chunk(out.user_facing)
+            return out
+
+        system_prompt, user_prompt, citations = self._build_llm_prompts(state, user_message, context)
+        parts: List[str] = []
+        for chunk in llm_client.chat_text_stream(system_prompt=system_prompt, user_prompt=user_prompt):
+            parts.append(chunk)
+            on_chunk(chunk)
+        text = "".join(parts).strip()
+
+        if not text:
+            return AgentOutput(
+                decision={},
+                confidence=0.25,
+                analysis="LLM returned empty response",
+                user_facing=(
+                    "I could not generate a reply (the language model returned no text). "
+                    "Please try again or check your LLM provider configuration."
+                ),
+                metadata={},
+            )
+
+        return AgentOutput(
+            decision={},
+            confidence=0.9,
+            analysis="LLM generated final response (streamed)",
+            user_facing=text,
             metadata={"citations": [c.model_dump() for c in citations]},
         )
 

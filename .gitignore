@@ -69,3 +69,5 @@ users.db
 notebook/
 
 TODO.md
+# Derived TF-IDF matrix cache (rebuilt automatically from chunks.json)
+data/vector_store/vectors.npy

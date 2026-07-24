@@ -5,6 +5,7 @@ import re
 from typing import Literal
 
 from app.agents.base import BaseAgent
+from app.config import settings
 from app.core.llm import llm_client
 from app.core.types import AgentOutput, SessionState
 
@@ -68,7 +69,11 @@ class IntentAgent(BaseAgent):
             f"context: {context[:1200]}\n"
             "Classify and extract fields for downstream responder."
         )
-        data = llm_client.chat_json(system_prompt=system_prompt, user_prompt=user_prompt)
+        data = llm_client.chat_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=settings.LLM_INTENT_MODEL or None,
+        )
         if not data:
             return None
 

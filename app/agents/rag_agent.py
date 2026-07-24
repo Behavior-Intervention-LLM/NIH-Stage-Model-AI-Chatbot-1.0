@@ -157,55 +157,53 @@ class RAGAgent(BaseAgent):
 
     #     return deduped[:top_k]
 
+    # Intents where retrieval adds nothing.
+    _SKIP_RETRIEVAL_INTENTS = {"chit_chat", "admin", "debug"}
+
+    @staticmethod
+    def _search_query(state: SessionState, user_message: str) -> str:
+        # The orchestrator may append uploaded-document text to the message;
+        # keep the query to the actual question so TF-IDF matching stays sharp.
+        query = user_message.split("\n\n[Session uploaded context]")[0].strip()
+        stage = state.slots.stage
+        if stage:
+            query += f" NIH Stage {stage}"
+        return query
+
     # -------------------------
     # MAIN RUN
     # -------------------------
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
-        return AgentOutput(
-            decision={"rag_invoked": False, "strategy": "disabled", "results_found": 0},
-            confidence=0.0,
-            analysis="RAG disabled",
-            actions=[]
-        )
-
+        """Plan retrieval deterministically (no LLM call): one vector_tool
+        search against the local TF-IDF store, executed by the orchestrator."""
         intent = state.slots.extracted_features.get("intent_payload", {}) or {}
-        intent_label = str(intent.get("intent_label", "general_qa"))
+        intent_label = str(intent.get("intent_label", "general_qa")).lower()
 
-        # Decide if retrieval needed
-        should_retrieve = True
+        if intent_label in self._SKIP_RETRIEVAL_INTENTS:
+            return AgentOutput(
+                decision={"rag_invoked": False, "strategy": "skipped_by_intent", "results_found": 0},
+                confidence=0.9,
+                analysis=f"Retrieval skipped for intent '{intent_label}'",
+                actions=[],
+            )
 
-        # Expand query
-        search_query = self._expand_query(user_message, intent_label)
-
-        print(f"[*] RAGAgent retrieving for: {user_message[:50]}...")
-
-        # Retrieval pipeline
-        docs = self._retrieve(search_query)
-
-        found = len(docs) > 0
-
+        search_query = self._search_query(state, user_message)
         return AgentOutput(
-            decision={
-                "rag_invoked": should_retrieve,
-                "strategy": "agentic_hybrid_rerank",
-                "results_found": len(docs)
-            },
-            confidence=0.95 if found else 0.3,
-            analysis="Hybrid semantic retrieval with cross-encoder reranking and structured outputs",
+            decision={"rag_invoked": True, "rag_strategy": "tfidf_vector_search"},
+            confidence=0.9,
+            analysis="Planned local vector store retrieval",
             actions=[
                 ToolCall(
-                    tool_name="rag_retrieval",
-                    tool_args={"query": search_query, "results": docs},
+                    tool_name="vector_tool",
+                    tool_args={"query": search_query, "top_k": 4},
                 )
-            ]
+            ],
         )
 
     # -------------------------
     # STATE UPDATE
     # -------------------------
-    # def update_state(self, state: SessionState, output: AgentOutput):
-    #     if output.actions and output.actions[0].output:
-    #         state.slots.extracted_features["retrieved_context"] = output.actions[0].output
-
     def update_state(self, state: SessionState, output: AgentOutput):
-        state.slots.extracted_features["retrieved_context"] = ""
+        # Retrieval results land in state.artifacts (via the orchestrator's
+        # tool execution); the responder collects evidence from there.
+        pass

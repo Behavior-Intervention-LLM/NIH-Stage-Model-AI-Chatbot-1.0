@@ -494,14 +494,48 @@ if user_input:
                     sync_active_conversation_messages()
                 else:
                     orchestrator = get_orchestrator()
-                    reply, debug_info = orchestrator.process_message(
-                        session_id=payload["session_id"],
-                        user_message=payload["message"],
-                        workflow_override=payload.get("workflow"),
-                        uploaded_context_text=payload.get("document_text"),
-                    )
+
+                    # Stream the response: the orchestrator runs in a worker
+                    # thread and pushes responder tokens into a queue that
+                    # st.write_stream drains in the main thread.
+                    import queue
+                    import threading
+
+                    token_queue: queue.Queue = queue.Queue()
+                    _DONE = object()
+                    result_holder = {}
+
+                    def _run_orchestrator():
+                        try:
+                            result_holder["result"] = orchestrator.process_message(
+                                session_id=payload["session_id"],
+                                user_message=payload["message"],
+                                workflow_override=payload.get("workflow"),
+                                uploaded_context_text=payload.get("document_text"),
+                                stream_handler=token_queue.put,
+                            )
+                        except Exception as worker_exc:
+                            result_holder["error"] = worker_exc
+                        finally:
+                            token_queue.put(_DONE)
+
+                    worker = threading.Thread(target=_run_orchestrator, daemon=True)
+                    worker.start()
+
+                    def _token_gen():
+                        while True:
+                            item = token_queue.get()
+                            if item is _DONE:
+                                break
+                            yield item
+
+                    st.write_stream(_token_gen())
+                    worker.join()
+
+                    if "error" in result_holder:
+                        raise result_holder["error"]
+                    reply, debug_info = result_holder["result"]
                     reply = Guardrails.sanitize_response(reply)
-                    st.markdown(reply)
 
                     debug_info = debug_info or {}
                     if debug_info and st.session_state.debug_mode:

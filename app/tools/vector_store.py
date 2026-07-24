@@ -60,8 +60,13 @@ class SimpleVectorStore:
         
         #  IDF
         doc_count = len(self.chunks)
-        for token, token_id in self.vocabulary.items():
-            df = sum(1 for tokens in all_tokens if token in tokens)
+        token_sets = [set(tokens) for tokens in all_tokens]
+        df_counts: Dict[str, int] = {}
+        for token_set in token_sets:
+            for token in token_set:
+                df_counts[token] = df_counts.get(token, 0) + 1
+        for token in self.vocabulary:
+            df = df_counts.get(token, 0)
             self.idf[token] = np.log((doc_count + 1) / (df + 1)) + 1
         
         #  TF-IDF 
@@ -147,6 +152,10 @@ class SimpleVectorStore:
         """"""
         data_file = self.storage_path / "chunks.json"
         metadata_file = self.storage_path / "metadata.json"
+        vectors_file = self.storage_path / "vectors.npy"
+
+        if self.vectors is not None:
+            np.save(vectors_file, self.vectors)
         
         #  chunks
         chunks_data = [chunk.to_dict() for chunk in self.chunks]
@@ -186,10 +195,26 @@ class SimpleVectorStore:
                     metadata = json.load(f)
                     self.vocabulary = metadata.get('vocabulary', {})
                     self.idf = metadata.get('idf', {})
-            
-            # 
+
+            # Reuse the cached TF-IDF matrix when it matches the corpus;
+            # only rebuild if the cache is missing or stale.
+            vectors_file = self.storage_path / "vectors.npy"
+            if (
+                vectors_file.exists()
+                and self.vocabulary
+                and self.idf
+            ):
+                try:
+                    vectors = np.load(vectors_file)
+                    if vectors.shape == (len(self.chunks), len(self.vocabulary)):
+                        self.vectors = vectors
+                        return
+                except Exception:
+                    pass
+
             if self.chunks:
                 self._rebuild_index()
+                np.save(vectors_file, self.vectors)
     
     def get_stats(self) -> Dict:
         """"""
