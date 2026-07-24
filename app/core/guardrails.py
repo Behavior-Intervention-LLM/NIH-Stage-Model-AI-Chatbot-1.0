@@ -50,7 +50,9 @@ _OFF_TOPIC_KEYWORDS = [
 ]
 
 _REJECTION_MESSAGE = (
-    "Sorry, this isn't behavioral science related, therefore I cannot help you."
+    "I'm focused on behavioral intervention science and the NIH Stage Model, "
+    "so that topic is outside what I can help with. Feel free to ask about "
+    "your intervention, study design, stage classification, measures, or grant planning."
 )
 
 
@@ -108,23 +110,19 @@ class Guardrails:
 
     @classmethod
     def _keyword_topic_check(cls, message: str) -> bool:
-        """Rule-based fallback: match against known behavioral science keywords."""
+        """Default-allow pre-filter: only block messages that match a clearly
+        off-topic keyword and carry no behavioral science signal. Everything
+        else passes through to the intent agent, which does the real
+        LLM-based topic classification."""
         lower = message.lower()
 
-        # Admin slash-commands are always allowed.
-        if lower.strip().startswith("/"):
-            return True
-
-        # Pure greetings (short + only greeting tokens) are allowed.
-        words = lower.split()
-        if len(words) <= 5 and all(w.strip(".,!?") in cls._GREETING_TOKENS for w in words):
-            return True
-
-        # Require at least one behavioral science keyword to pass.
         if any(kw in lower for kw in _BEHAVIORAL_SCIENCE_KEYWORDS):
             return True
 
-        return False
+        if any(kw in lower for kw in _OFF_TOPIC_KEYWORDS):
+            return False
+
+        return True
 
     @classmethod
     def rejection_message(cls) -> str:
