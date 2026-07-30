@@ -241,12 +241,17 @@ def change_password(username: str, old_password: str, new_password: str) -> tupl
 
 
 def delete_user(username: str) -> bool:
+    username = _normalize_username(username)
     init_db()
     with _db() as conn:
-        cur = conn.execute(
-            _sql("DELETE FROM users WHERE username = ?"), (_normalize_username(username),)
-        )
-        return cur.rowcount > 0
+        cur = conn.execute(_sql("DELETE FROM users WHERE username = ?"), (username,))
+        deleted = cur.rowcount > 0
+    if deleted:
+        # Lazy import: chat_history imports this module at load time.
+        from chat_history import delete_all_for_user
+
+        delete_all_for_user(username)
+    return deleted
 
 
 def list_users() -> list[dict]:

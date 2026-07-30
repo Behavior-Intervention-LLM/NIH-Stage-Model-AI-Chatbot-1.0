@@ -13,6 +13,7 @@ from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
 from app.tools import tool_registry
 import auth as user_auth
+import chat_history
 
 app = FastAPI(
     title=settings.API_TITLE,
@@ -102,32 +103,47 @@ async def favicon():
     return Response(status_code=204)
 
 #TODO: Logging 
+def _record_history(username: str, session_id: str, message: str, reply: str) -> None:
+    """Persist an exchange; history failures must never break the chat itself."""
+    try:
+        chat_history.record_exchange(username, session_id, message, reply)
+    except Exception:
+        logger.warning("Failed to record chat history", exc_info=True)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, username: str = Depends(require_auth)):
     try:
+        session_id = request.session_id or "default"
+        owner = chat_history.owner_of(session_id)
+        if owner is not None and owner != username:
+            raise HTTPException(status_code=403, detail="Session belongs to another user.")
+
         is_valid, error_msg = Guardrails.validate_message(request.message)
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
 
         if not Guardrails.is_behavioral_science_related(request.message):
             reply = Guardrails.rejection_message()
+            _record_history(username, session_id, request.message, reply)
             return ChatResponse(
-                session_id=request.session_id or "default",
+                session_id=session_id,
                 reply=reply,
                 debug={},
             )
 
         reply, debug_info = orchestrator.process_message(
-            session_id=request.session_id or "default",
+            session_id=session_id,
             user_message=request.message,
             workflow_override=request.workflow,
             uploaded_context_text=request.document_text,
         )
 
         reply = Guardrails.sanitize_response(reply)
+        _record_history(username, session_id, request.message, reply)
 
         response = ChatResponse(
-            session_id=request.session_id or "default",
+            session_id=session_id,
             reply=reply,
             debug=debug_info
         )
@@ -143,10 +159,42 @@ async def chat(request: ChatRequest, username: str = Depends(require_auth)):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@app.get("/conversations")
+async def list_conversations(username: str = Depends(require_auth)):
+    """List the authenticated user's conversations, most recent first."""
+    return {"conversations": chat_history.list_conversations(username)}
+
+
+@app.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: str, username: str = Depends(require_auth)
+):
+    """Return the messages of a conversation the authenticated user owns."""
+    messages = chat_history.get_messages(username, conversation_id)
+    if messages is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"conversation_id": conversation_id, "messages": messages}
+
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str, username: str = Depends(require_auth)
+):
+    """Delete a conversation the authenticated user owns."""
+    if not chat_history.delete_conversation(username, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "deleted"}
+
+
 @app.get("/sessions/{session_id}")
 async def get_session(session_id: str, username: str = Depends(require_auth)):
     """Return session state (debug)."""
     from app.core.state_store import state_store
+
+    # 404 (not 403) so the response never confirms another user's session exists.
+    owner = chat_history.owner_of(session_id)
+    if owner is not None and owner != username:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     state = state_store.get_state(session_id)
     if not state:

@@ -21,6 +21,7 @@ except Exception:
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
 from app.tools import tool_registry
+import chat_history
 
 
 # How is it storing/logging information - do we need to set up a "database"
@@ -122,9 +123,16 @@ if "show_thinking_trace" not in st.session_state:
     st.session_state.show_thinking_trace = True
 if "selected_workflow" not in st.session_state:
     st.session_state.selected_workflow = "auto"
+def _history_username() -> str:
+    """Username that owns persisted chat history (matches backend auth)."""
+    if os.environ.get("AUTH_DISABLED", "").lower() == "true":
+        return "anonymous"
+    return st.session_state.get("auth_username") or "anonymous"
+
+
 if "conversations" not in st.session_state:
     initial_id = st.session_state.session_id
-    st.session_state.conversations = {
+    conversations = {
         initial_id: {
             "session_id": initial_id,
             "title": "New Chat",
@@ -132,9 +140,45 @@ if "conversations" not in st.session_state:
             "created_at": datetime.now().isoformat(),
         }
     }
+    # Restore this user's persisted conversations from the auth database.
+    # Messages are lazy-loaded (None) until a conversation is opened.
+    try:
+        for conv in chat_history.list_conversations(_history_username()):
+            conversations[conv["id"]] = {
+                "session_id": conv["id"],
+                "title": conv["title"],
+                "messages": None,
+                "created_at": conv["created_at"],
+            }
+    except Exception:
+        pass  # history is best-effort; never block the chat UI
+    st.session_state.conversations = conversations
 if "active_conversation_id" not in st.session_state:
     st.session_state.active_conversation_id = next(iter(st.session_state.conversations.keys()))
 
+
+def _ensure_messages_loaded(conv: dict) -> None:
+    """Fetch a DB-backed conversation's messages on first open."""
+    if conv.get("messages") is not None:
+        return
+    try:
+        rows = chat_history.get_messages(_history_username(), conv["session_id"]) or []
+    except Exception:
+        rows = []
+    conv["messages"] = [
+        {"role": r["role"], "content": r["content"], "timestamp": r["created_at"]}
+        for r in rows
+    ]
+
+
+def _record_exchange(user_text: str, assistant_text: str) -> None:
+    """Persist one turn to the database; failures never break the chat."""
+    try:
+        chat_history.record_exchange(
+            _history_username(), st.session_state.session_id, user_text, assistant_text
+        )
+    except Exception:
+        pass
 
 
 # What is happening here
@@ -157,7 +201,9 @@ def get_active_conversation() -> dict:
     if conv_id not in st.session_state.conversations:
         create_new_conversation()
         conv_id = st.session_state.active_conversation_id
-    return st.session_state.conversations[conv_id]
+    conv = st.session_state.conversations[conv_id]
+    _ensure_messages_loaded(conv)
+    return conv
 
 
 def sync_active_conversation_messages():
@@ -398,6 +444,9 @@ with st.sidebar:
         if st.button("🚪 Log Out", use_container_width=True):
             st.session_state.authenticated = False
             st.session_state.auth_username = None
+            # Drop per-user state so the next login reloads its own history.
+            for _key in ("conversations", "active_conversation_id", "messages", "session_id"):
+                st.session_state.pop(_key, None)
             st.rerun()
         with st.expander("🔑 Change Password"):
             with st.form("change_password_form"):
@@ -435,16 +484,31 @@ with st.sidebar:
     if selected_conv_id != st.session_state.active_conversation_id:
         st.session_state.active_conversation_id = selected_conv_id
         st.session_state.session_id = selected_conv_id
-        st.session_state.messages = st.session_state.conversations[selected_conv_id].get("messages", [])
+        selected_conv = st.session_state.conversations[selected_conv_id]
+        _ensure_messages_loaded(selected_conv)
+        st.session_state.messages = selected_conv.get("messages", [])
         st.rerun()
 
     active_conv = get_active_conversation()
     # st.caption(f"Session ID: `{active_conv['session_id'][:8]}...`")
 
-    # if st.button("🧹 Clear Current Chat", use_container_width=True):
-    #     st.session_state.messages = []
-    #     sync_active_conversation_messages()
-    #     st.rerun()
+    if st.button("🗑️ Delete Current Chat", use_container_width=True):
+        _deleted_id = st.session_state.active_conversation_id
+        try:
+            chat_history.delete_conversation(_history_username(), _deleted_id)
+        except Exception:
+            pass
+        st.session_state.conversations.pop(_deleted_id, None)
+        remaining = list(st.session_state.conversations.keys())
+        if remaining:
+            st.session_state.active_conversation_id = remaining[0]
+            st.session_state.session_id = remaining[0]
+            next_conv = st.session_state.conversations[remaining[0]]
+            _ensure_messages_loaded(next_conv)
+            st.session_state.messages = next_conv.get("messages", [])
+        else:
+            create_new_conversation()
+        st.rerun()
 
     st.markdown("---")
     st.subheader("Settings")
@@ -549,6 +613,7 @@ if user_input:
                         "debug": {},
                     })
                     sync_active_conversation_messages()
+                    _record_exchange(user_input, reply)
                 else:
                     orchestrator = get_orchestrator()
 
@@ -622,6 +687,7 @@ if user_input:
                     }
                     st.session_state.messages.append(assistant_message)
                     sync_active_conversation_messages()
+                    _record_exchange(user_input, reply)
 
             except Exception as exc:
                 st.error(f"❌ Error: {str(exc)}")
