@@ -123,6 +123,8 @@ if "show_thinking_trace" not in st.session_state:
     st.session_state.show_thinking_trace = True
 if "selected_workflow" not in st.session_state:
     st.session_state.selected_workflow = "auto"
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "chat"
 def _history_username() -> str:
     """Username that owns persisted chat history (matches backend auth)."""
     if os.environ.get("AUTH_DISABLED", "").lower() == "true":
@@ -409,6 +411,95 @@ def render_thinking_trace(debug_info: dict):
     )
 
 
+def render_about_page():
+    """Static About page (content from 'About the NIH Stage Model Chatbot')."""
+    st.title("ℹ️ About the NIH Stage Model Chatbot")
+    st.markdown(
+        """
+        The NIH Stage Model Chatbot is an AI assistant designed to help behavioral
+        scientists apply the NIH Stage Model throughout the intervention development
+        process. Whether you are generating new research ideas, developing an NIH
+        grant application, writing a manuscript, preparing a presentation, or
+        planning the next phase of an intervention program, the chatbot can provide
+        stage-specific guidance grounded in the NIH Stage Model.
+
+        **The chatbot can help you:**
+        - Determine the most appropriate NIH Stage for your intervention or research project.
+        - Clarify what evidence is needed to justify progression to the next Stage.
+        - Identify potential mechanisms of behavior change and recommend validated measures to assess them.
+        - Suggest study designs, comparison groups, outcomes, and fidelity assessments that align with a given Stage.
+        - Anticipate common reviewer concerns and identify gaps in a research plan.
+        - Explain how hybrid effectiveness-implementation designs, optimization trials, and implementation studies fit within the NIH Stage Model.
+        - Recommend strategies for reporting intervention development studies in manuscripts and presentations.
+        """
+    )
+
+    st.header("Example Questions")
+    example_sections = [
+        (
+            "📝 Developing a grant",
+            [
+                '"I have an intervention that showed promising feasibility results. '
+                'What NIH Stage am I in, and what should my next R01 study look like?"',
+                '"What mechanisms of behavior change should I measure in this Stage Ib trial?"',
+                '"What control group would be appropriate for a Stage II efficacy trial?"',
+            ],
+        ),
+        (
+            "🔬 Planning a study",
+            [
+                '"How large should my pilot study be?"',
+                '"Should I conduct another pilot study or move directly to an efficacy trial?"',
+                '"How should I evaluate intervention fidelity at this Stage?"',
+            ],
+        ),
+        (
+            "📄 Writing a manuscript",
+            [
+                '"Does this study fit the NIH Stage Model?"',
+                '"How should I describe my intervention development process using the NIH Stage Model?"',
+                '"What limitations should I discuss based on my current Stage?"',
+            ],
+        ),
+        (
+            "📊 Preparing presentations",
+            [
+                '"Help me explain why our intervention is ready to advance to the next Stage."',
+                '"Create a figure illustrating our progression through the NIH Stage Model."',
+                '"Summarize the rationale for our study using NIH Stage Model terminology."',
+            ],
+        ),
+        (
+            "🎓 Learning the NIH Stage Model",
+            [
+                '"Explain the difference between Stage Ia and Stage Ib."',
+                '"When should implementation outcomes first be measured?"',
+                '"How do optimization trials fit within the NIH Stage Model?"',
+            ],
+        ),
+    ]
+    for section_title, questions in example_sections:
+        with st.expander(section_title):
+            for q in questions:
+                st.markdown(f"- {q}")
+
+    st.info(
+        "**Tip:** The chatbot works best when you provide context. Paste a draft "
+        "Specific Aims page, manuscript abstract, study design, or intervention "
+        "description, and ask the chatbot to critique it through the lens of the "
+        "NIH Stage Model. It can identify your current Stage, highlight strengths "
+        "and gaps, suggest mechanisms to measure, and recommend logical next steps "
+        "in intervention development."
+    )
+    st.warning(
+        "**Important:** The chatbot is intended as a scientific planning and "
+        "educational resource. Its recommendations should complement—not "
+        "replace—careful review of the NIH Stage Model literature, relevant "
+        "methodological guidance, and consultation with collaborators, mentors, "
+        "and NIH program staff."
+    )
+
+
 def render_workflow_cards():
     # st.markdown("### Guided Workflows")
     # st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
@@ -464,6 +555,19 @@ with st.sidebar:
                         st.session_state.get("auth_username", ""), current_pw, new_pw
                     )
                     (st.success if ok else st.error)(msg)
+    st.markdown("---")
+
+    nav_choice = st.radio(
+        "Page",
+        options=["chat", "about"],
+        index=0 if st.session_state.current_page == "chat" else 1,
+        format_func=lambda p: {"chat": "💬 Chat", "about": "ℹ️ About"}[p],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    if nav_choice != st.session_state.current_page:
+        st.session_state.current_page = nav_choice
+        st.rerun()
     st.markdown("---")
 
     st.subheader("Conversations")
@@ -541,6 +645,10 @@ with st.sidebar:
             - "What are Stage I requirements?"
             """
         )
+
+if st.session_state.current_page == "about":
+    render_about_page()
+    st.stop()
 
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
