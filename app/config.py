@@ -65,6 +65,30 @@ class Settings(BaseSettings):
     VECTOR_DB_URL: Optional[str] = os.getenv("VECTOR_DB_URL")
     VECTOR_DB_API_KEY: Optional[str] = os.getenv("VECTOR_DB_API_KEY")
 
+    # Retrieval loop (orchestrator: rag_plan → assess_evidence → retry?)
+    RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))
+    # Total retrieval attempts per turn. 1 disables reformulation entirely.
+    RAG_MAX_ATTEMPTS: int = int(os.getenv("RAG_MAX_ATTEMPTS", "2"))
+    # A passage counts as evidence only if it clears BOTH floors.
+    #
+    # Calibrated over 20 on-topic and 10 off-topic queries against the rebuilt
+    # index (179 chunks): on-topic bottoms out at cosine 0.138 / coverage
+    # 0.290, so these floors reject no on-topic query measured while catching
+    # 8 of 10 off-topic ones. The two that pass ("capital of France",
+    # "who won the world cup") share real corpus vocabulary; raising coverage
+    # to catch them costs on-topic recall, which is the worse error — the
+    # responder still sees the passages and can judge them.
+    #
+    # Neither signal works alone: cosine alone ranks "who won the world cup"
+    # (0.278) above most real Stage questions.
+    #
+    # Recalibrate if the corpus changes substantially.
+    RAG_MIN_RELEVANCE: float = float(os.getenv("RAG_MIN_RELEVANCE", "0.10"))
+    RAG_MIN_COVERAGE: float = float(os.getenv("RAG_MIN_COVERAGE", "0.25"))
+    # Use the cheap LLM to rewrite a failed query. Falls back to the
+    # deterministic keyword ladder when disabled or when the call fails.
+    RAG_LLM_REFORMULATION: bool = os.getenv("RAG_LLM_REFORMULATION", "True").lower() == "true"
+
     # Implicit feedback system (app/feedback/) — no human ratings are collected.
     FEEDBACK_ENABLED: bool = os.getenv("FEEDBACK_ENABLED", "True").lower() == "true"
     # LLM-as-judge pass over each completed turn. Runs off the request path.

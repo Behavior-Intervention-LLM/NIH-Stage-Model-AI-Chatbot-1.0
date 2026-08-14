@@ -39,6 +39,24 @@ class IntentAgent(BaseAgent):
     def _detect_language(text: str) -> str:
         return "zh" if re.search(r"[\u4e00-\u9fff]", text or "") else "en"
 
+    @staticmethod
+    def _has(text: str, phrase: str) -> bool:
+        """Whole-word keyword match.
+
+        Plain `phrase in text` misfires badly on the short keywords below:
+        "hi" matches inside "something", "so" inside "personal", which
+        silently routed ordinary questions to chit_chat and skipped retrieval.
+        """
+        return re.search(rf"\b{re.escape(phrase)}\b", text) is not None
+
+    @classmethod
+    def _any(cls, text: str, phrases: list[str]) -> bool:
+        return any(cls._has(text, p) for p in phrases)
+
+    @classmethod
+    def _count(cls, text: str, phrases: list[str]) -> int:
+        return sum(1 for p in phrases if cls._has(text, p))
+
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
         llm_output = self._run_with_llm(user_message, context)
         if llm_output:
@@ -166,6 +184,8 @@ class IntentAgent(BaseAgent):
         confidence = 0.45
         query_type = "general_qa"
 
+        # These lists carried duplicate entries (a zh/en pair collapsed into two
+        # identical English strings), which double-counted the same hit.
         stage_keywords = [
             "nih stage",
             "stage model",
@@ -175,27 +195,25 @@ class IntentAgent(BaseAgent):
             "stage iii",
             "stage iv",
             "stage v",
-            "intervention",
-            "mechanism",
-            "efficacy",
-            "effectiveness",
-            "implementation",
-            "sustainability",
             "stage",
             "intervention",
             "mechanism",
             "efficacy",
             "effectiveness",
             "implementation",
+            "sustainability",
         ]
-        stage_task_keywords = ["requirements", "criteria", "next step", "what should", "requirements", "next step", "how to proceed", "recommendation"]
-        qa_keywords = ["what is", "what are", "explain", "tell me", "define", "what is", "explain", "introduce"]
-        chit_chat_keywords = ["hello", "hi", "thanks", "thank you", "bye", "how are you", "hello", "hi", "thanks"]
+        stage_task_keywords = [
+            "requirements", "criteria", "next step", "what should",
+            "how to proceed", "recommendation",
+        ]
+        qa_keywords = ["what is", "what are", "explain", "tell me", "define", "introduce"]
+        chit_chat_keywords = ["hello", "hi", "hey", "thanks", "thank you", "bye", "how are you"]
 
         is_definition_query = (
-            any(
-                k in message_lower
-                for k in [
+            self._any(
+                message_lower,
+                [
                     "what is",
                     "what's",
                     "define",
@@ -204,24 +222,24 @@ class IntentAgent(BaseAgent):
                     "how many stages",
                     "number of stages",
                     "list stages",
-                ]
+                ],
             )
-            and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model", "stage model"])
+            and self._any(message_lower, ["nih stage model", "nih stage", "stage model"])
         )
 
-        if any(k in message_lower for k in ["next step", "what should", "next step", "how to proceed", "recommendation"]):
+        if self._any(message_lower, ["next step", "what should", "how to proceed", "recommendation"]):
             query_type = "next_step"
-        elif any(k in message_lower for k in ["requirement", "requirements", "criteria", "requirements", "criteria"]):
+        elif self._any(message_lower, ["requirement", "requirements", "criteria"]):
             query_type = "stage_requirements"
         elif is_definition_query:
             query_type = "definition"
-        elif "stage" in message_lower or "stage" in message_lower:
+        elif self._has(message_lower, "stage"):
             query_type = "stage_classification"
 
-        stage_score = sum(1 for kw in stage_keywords if kw in message_lower)
-        stage_task_score = sum(1 for kw in stage_task_keywords if kw in message_lower)
-        qa_score = sum(1 for kw in qa_keywords if kw in message_lower)
-        chat_score = sum(1 for kw in chit_chat_keywords if kw in message_lower)
+        stage_score = self._count(message_lower, stage_keywords)
+        stage_task_score = self._count(message_lower, stage_task_keywords)
+        qa_score = self._count(message_lower, qa_keywords)
+        chat_score = self._count(message_lower, chit_chat_keywords)
 
         if message_lower.startswith("/"):
             intent_label = "admin"
@@ -255,11 +273,11 @@ class IntentAgent(BaseAgent):
         extracted_signals = []
         if is_definition_query:
             extracted_signals.append("definition_query")
-        if "pilot" in message_lower or "feasibility" in message_lower:
+        if self._any(message_lower, ["pilot", "feasibility"]):
             extracted_signals.append("feasibility_signal")
-        if "rct" in message_lower or "randomized" in message_lower:
+        if self._any(message_lower, ["rct", "randomized"]):
             extracted_signals.append("rct_signal")
-        if "mechanism" in message_lower or "mechanism" in message_lower:
+        if self._has(message_lower, "mechanism"):
             extracted_signals.append("mechanism_signal")
 
         user_goal = None

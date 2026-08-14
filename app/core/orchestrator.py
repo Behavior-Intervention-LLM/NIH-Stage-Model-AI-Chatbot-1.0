@@ -19,7 +19,8 @@ from app.agents.stage_agent import StageAgent
 # from app.agents.study_builder_agent import StudyBuilderAgent
 from app.core.memory import memory_manager
 from app.core.state_store import state_store
-from app.core.types import AgentOutput, MessageRole, SessionState, ToolCall
+from app.config import settings
+from app.core.types import AgentOutput, Citation, MessageRole, SessionState, ToolCall
 from app.tools.base import ToolRegistry
 
 
@@ -49,14 +50,17 @@ class ChatGraphState(TypedDict, total=False):
     stage_result: Optional[str]
     stage_confidence: float
 
-    # Legacy ReAct / per-node tool-phase fields; after graph simplification only some remain in _rag_plan traces.
-    # react_step: int
-    # max_react_steps: int
     react_last_planned_tools: int
     tool_results_count: int
 
-    # Retrieval observed on THIS turn only. state.artifacts accumulates across
-    # the whole session, so it cannot be used to attribute credit per turn.
+    # Retrieval loop: which attempt we are on, what has already been searched,
+    # and the verdict on what came back. Drives the rag_plan retry edge.
+    rag_attempt: int
+    rag_queries_tried: List[str]
+    rag_assessment: Dict[str, Any]
+
+    # Retrieval observed on THIS turn, accumulated across retrieval attempts.
+    turn_citations: List[Citation]
     turn_sources: List[Dict[str, Any]]
     turn_tool_errors: int
 
@@ -93,8 +97,8 @@ class Orchestrator:
         # graph.add_node("grant_partner", self._grant_partner)
         # graph.add_node("guardrails", self._guardrails)
         graph.add_node("rag_plan", self._rag_plan)
-        # graph.add_node("run_tools", self._run_tools)
-        # graph.add_node("react_judge", self._react_judge)
+        graph.add_node("run_tools", self._run_tools)
+        graph.add_node("assess_evidence", self._assess_evidence)
         graph.add_node("responder", self._responder)
         graph.add_node("finalize", self._finalize)
 
@@ -116,18 +120,19 @@ class Orchestrator:
         # graph.add_edge("measure_finder", "guardrails")
         # graph.add_edge("grant_partner", "guardrails")
         # graph.add_edge("guardrails", "rag_plan")
-        # graph.add_edge("rag_plan", "run_tools")
-        # graph.add_edge("run_tools", "responder")
-        graph.add_edge("rag_plan", "responder")
-        # graph.add_edge("run_tools", "react_judge")
-        # graph.add_conditional_edges(
-        #     "react_judge",
-        #     self._route_after_react_judge,
-        #     {
-        #         "rag_plan": "rag_plan",
-        #         "responder": "responder",
-        #     },
-        # )
+
+        # Retrieval loop: plan → retrieve → judge the evidence → retry with a
+        # reformulated query, or hand what we have to the responder.
+        graph.add_edge("rag_plan", "run_tools")
+        graph.add_edge("run_tools", "assess_evidence")
+        graph.add_conditional_edges(
+            "assess_evidence",
+            self._route_after_assess,
+            {
+                "rag_plan": "rag_plan",
+                "responder": "responder",
+            },
+        )
         graph.add_edge("responder", "finalize")
         graph.add_edge("finalize", END)
 
@@ -182,6 +187,12 @@ class Orchestrator:
             state = state_store.create_state(session_id)
         state.add_message(MessageRole.USER, user_message)
 
+        # Artifacts are this turn's tool observations, not a session log. They
+        # used to accumulate, so the responder was handed passages retrieved
+        # for earlier questions as evidence for the current one. Conversation
+        # continuity lives in messages/summary, which is where it belongs.
+        state.artifacts.clear()
+
         # Persist uploaded context in session memory so subsequent turns can reuse it.
         existing_uploaded = str(state.slots.extracted_features.get("session_uploaded_context", "") or "")
         if uploaded_context_text:
@@ -211,10 +222,14 @@ class Orchestrator:
             "context": memory_manager.get_context_for_agent(state),
             "pending_tool_calls": [],
             "called_agents": [],
-            # "react_step": 0,
-            # "max_react_steps": 3,
             "react_last_planned_tools": 0,
             "tool_results_count": 0,
+            "rag_attempt": 0,
+            "rag_queries_tried": [],
+            "rag_assessment": {},
+            "turn_citations": [],
+            "turn_sources": [],
+            "turn_tool_errors": 0,
             "debug_info": {
                 "execution_trace": [],
                 "orchestration_engine": "langgraph",
@@ -391,18 +406,28 @@ class Orchestrator:
     #     return {**gstate, "state": state}
 
     def _rag_plan(self, gstate: ChatGraphState) -> ChatGraphState:
+        """Plan this attempt's retrieval. Re-entered on a retry, with the
+        previous attempt's queries and verdict available to the agent."""
         state = gstate["state"]
         user_message = gstate["user_message"]
-        context = gstate["context"]
 
-        out = self.agents["rag_agent"].run(state, user_message, context)
+        attempt = int(gstate.get("rag_attempt", 0))
+        queries_tried = list(gstate.get("rag_queries_tried", []))
+
+        out = self.agents["rag_agent"].plan(
+            state,
+            user_message,
+            attempt=attempt,
+            previous_queries=queries_tried,
+            assessment=gstate.get("rag_assessment") or {},
+        )
         self.agents["rag_agent"].update_state(state, out)
 
-        pending = list(gstate.get("pending_tool_calls", []))
-        planned_now = 0
-        if out.actions:
-            pending.extend(out.actions)
-            planned_now = len(out.actions)
+        planned = list(out.actions or [])
+        for call in planned:
+            query = str(call.tool_args.get("query", "")).strip()
+            if query:
+                queries_tried.append(query)
 
         self._add_agent(gstate, "rag_agent", out)
         self._trace(
@@ -410,20 +435,40 @@ class Orchestrator:
             {
                 "kind": "react",
                 "name": "plan",
-                "step": 1,
-                "planned_tools": planned_now,
-                "analysis": "RAG planning generated tool actions",
+                "step": attempt + 1,
+                "planned_tools": len(planned),
+                "strategy": out.decision.get("rag_strategy"),
+                "queries": out.decision.get("queries", []),
+                "analysis": out.analysis,
             },
         )
 
+        return {
+            **gstate,
+            "state": state,
+            "last_output": out,
+            "pending_tool_calls": planned,
+            "rag_queries_tried": queries_tried,
+            "react_last_planned_tools": len(planned),
+        }
+
+    def _run_tools(self, gstate: ChatGraphState) -> ChatGraphState:
+        """Execute the planned tool calls, accumulating this turn's evidence
+        across retrieval attempts."""
+        state = gstate["state"]
+        pending = list(gstate.get("pending_tool_calls", []))
+
+        citations: List[Citation] = list(gstate.get("turn_citations", []))
+        turn_sources: List[Dict[str, Any]] = list(gstate.get("turn_sources", []))
+        tool_errors = int(gstate.get("turn_tool_errors", 0))
         count = 0
-        turn_sources: List[Dict[str, Any]] = []
-        tool_errors = 0
+
         for tool_call in pending:
             try:
                 artifact = self.tool_registry.run_tool(tool_call.tool_name, tool_call.tool_args)
                 state.artifacts.append(artifact)
                 count += 1
+                citations.extend(artifact.citations)
                 for citation in artifact.citations:
                     turn_sources.append(
                         {
@@ -437,7 +482,9 @@ class Orchestrator:
                     {
                         "kind": "tool",
                         "name": tool_call.tool_name,
+                        "query": tool_call.tool_args.get("query"),
                         "success": artifact.metadata.get("success", True),
+                        "citations": len(artifact.citations),
                         "sources": [c.source for c in artifact.citations[:3]],
                     },
                 )
@@ -449,9 +496,18 @@ class Orchestrator:
                     {"kind": "tool", "name": tool_call.tool_name, "success": False, "error": str(exc)},
                 )
 
-        # Best-scoring citations first, so per-source credit assignment sees
-        # the passages that actually drove the answer.
-        turn_sources.sort(key=lambda s: float(s.get("score") or 0.0), reverse=True)
+        # A retry usually re-surfaces some of the same passages. Deduplicate so
+        # per-source credit in the feedback loop is not inflated by the number
+        # of attempts it took to find the passage.
+        deduped: Dict[tuple, Dict[str, Any]] = {}
+        for entry in turn_sources:
+            key = (entry.get("source"), str(entry.get("passage", ""))[:120])
+            best = deduped.get(key)
+            if best is None or float(entry.get("score") or 0.0) > float(best.get("score") or 0.0):
+                deduped[key] = entry
+        turn_sources = sorted(
+            deduped.values(), key=lambda s: float(s.get("score") or 0.0), reverse=True
+        )
 
         gstate["debug_info"]["tools_called"] = len(state.artifacts)
         self._trace(
@@ -459,7 +515,7 @@ class Orchestrator:
             {
                 "kind": "react",
                 "name": "observe",
-                "step": 1,
+                "step": int(gstate.get("rag_attempt", 0)) + 1,
                 "executed_tools": len(pending),
                 "successful_results": count,
                 "analysis": "Tool observations stored as artifacts",
@@ -468,119 +524,86 @@ class Orchestrator:
         return {
             **gstate,
             "state": state,
-            "last_output": out,
             "pending_tool_calls": [],
-            "react_last_planned_tools": planned_now,
             "tool_results_count": count,
+            "turn_citations": citations,
             "turn_sources": turn_sources,
             "turn_tool_errors": tool_errors,
         }
 
-    # Legacy standalone node (main graph now inlines tool execution in _rag_plan; logic moved above).
-    # def _run_tools(self, gstate: ChatGraphState) -> ChatGraphState:
-    #     state = gstate["state"]
-    #     pending = gstate.get("pending_tool_calls", [])
-    #     count = 0
-    #     for tool_call in pending:
-    #         try:
-    #             artifact = self.tool_registry.run_tool(tool_call.tool_name, tool_call.tool_args)
-    #             state.artifacts.append(artifact)
-    #             count += 1
-    #             self._trace(
-    #                 gstate,
-    #                 {
-    #                     "kind": "tool",
-    #                     "name": tool_call.tool_name,
-    #                     "success": artifact.metadata.get("success", True),
-    #                     "sources": [c.source for c in artifact.citations[:3]],
-    #                 },
-    #             )
-    #         except Exception as exc:
-    #             gstate["debug_info"][f"tool_error_{tool_call.tool_name}"] = str(exc)
-    #             self._trace(
-    #                 gstate,
-    #                 {"kind": "tool", "name": tool_call.tool_name, "success": False, "error": str(exc)},
-    #             )
-    #     gstate["debug_info"]["tools_called"] = len(state.artifacts)
-    #     self._trace(
-    #         gstate,
-    #         {
-    #             "kind": "react",
-    #             "name": "observe",
-    #             "step": gstate.get("react_step", 0) + 1,
-    #             "executed_tools": len(pending),
-    #             "successful_results": count,
-    #             "analysis": "Tool observations stored as artifacts",
-    #         },
-    #     )
-    #     return {**gstate, "state": state, "pending_tool_calls": [], "tool_results_count": count}
+    def _assess_evidence(self, gstate: ChatGraphState) -> ChatGraphState:
+        """Judge whether retrieval produced anything worth answering from.
 
-    # Legacy ReAct judge node (not wired into the main graph).
-    # def _react_judge(self, gstate: ChatGraphState) -> ChatGraphState:
-    #     """Decide whether to continue ReAct loop or finalize response."""
-    #     current_step = int(gstate.get("react_step", 0))
-    #     next_step = current_step + 1
-    #     max_steps = int(gstate.get("max_react_steps", 3))
-    #     planned_tools = int(gstate.get("react_last_planned_tools", 0))
-    #     successful_results = int(gstate.get("tool_results_count", 0))
-    #     must_clarify = (
-    #         (
-    #             self._as_bool(gstate.get("intent_need_stage"), default=False)
-    #             or str(gstate.get("intent_workflow", "navigator")).lower()
-    #             in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"}
-    #         )
-    #         and not self._as_bool(gstate.get("intent_is_definition"), default=False)
-    #         and (
-    #             gstate.get("stage_result") is None
-    #             or float(gstate.get("stage_confidence", 0.0)) < 0.75
-    #         )
-    #     )
-    #     continue_loop = False
-    #     judge_reason = "response_ready"
-    #     if must_clarify:
-    #         continue_loop = False
-    #         judge_reason = "stage_uncertain_clarify_only"
-    #     elif successful_results > 0:
-    #         continue_loop = False
-    #         judge_reason = "evidence_collected"
-    #     elif planned_tools == 0:
-    #         continue_loop = False
-    #         judge_reason = "no_tool_needed"
-    #     elif next_step >= max_steps:
-    #         continue_loop = False
-    #         judge_reason = "react_step_budget_reached"
-    #     else:
-    #         continue_loop = True
-    #         judge_reason = "insufficient_observation_retry"
-    #     self._trace(
-    #         gstate,
-    #         {
-    #             "kind": "react",
-    #             "name": "judge",
-    #             "step": next_step,
-    #             "continue_loop": continue_loop,
-    #             "reason": judge_reason,
-    #             "planned_tools": planned_tools,
-    #             "successful_results": successful_results,
-    #         },
-    #     )
-    #     gstate["debug_info"]["react"] = {
-    #         "step": next_step,
-    #         "max_steps": max_steps,
-    #         "continue_loop": continue_loop,
-    #         "judge_reason": judge_reason,
-    #     }
-    #     return {
-    #         **gstate,
-    #         "react_step": next_step,
-    #         "react_continue": continue_loop,
-    #         "react_judge_reason": judge_reason,
-    #     }
+        This is the turn's only self-correction point: weak evidence sends the
+        graph back to rag_plan with a rewritten query instead of letting the
+        responder improvise over near-random passages.
+        """
+        state = gstate["state"]
+        citations: List[Citation] = list(gstate.get("turn_citations", []))
+        attempts_done = int(gstate.get("rag_attempt", 0)) + 1
+        planned_this_attempt = int(gstate.get("react_last_planned_tools", 0))
+        max_attempts = max(1, settings.RAG_MAX_ATTEMPTS)
 
-    # def _route_after_react_judge(self, gstate: ChatGraphState) -> str:
-    #     if self._as_bool(gstate.get("react_continue"), default=False):
-    #         return "rag_plan"
-    #     return "responder"
+        assessment = RAGAgent.assess_evidence(citations)
+        assessment["attempts"] = attempts_done
+        assessment["queries_tried"] = list(gstate.get("rag_queries_tried", []))
+
+        # Nothing was planned (intent skips retrieval, or reformulation had
+        # nothing new to try), so there is no failure here to retry.
+        retrieval_ran = planned_this_attempt > 0
+        retry = (
+            retrieval_ran
+            and not assessment["sufficient"]
+            and attempts_done < max_attempts
+        )
+        assessment["retrying"] = retry
+        if not retrieval_ran and not citations:
+            assessment["reason"] = "retrieval_not_attempted"
+
+        self._trace(
+            gstate,
+            {
+                "kind": "react",
+                "name": "assess",
+                "step": attempts_done,
+                "sufficient": assessment["sufficient"],
+                "reason": assessment["reason"],
+                "best_score": assessment["best_score"],
+                "threshold": assessment["threshold"],
+                "retrying": retry,
+            },
+        )
+
+        if retry:
+            return {**gstate, "state": state, "rag_assessment": assessment, "rag_attempt": attempts_done}
+
+        # Final verdict for this turn: keep only artifacts that carry at least
+        # one passage above the relevance floor. Everything else — including a
+        # tool's "no matches found" text — would otherwise reach the responder
+        # as if it were evidence.
+        threshold = assessment["threshold"]
+        if assessment["sufficient"]:
+            state.artifacts = [
+                artifact
+                for artifact in state.artifacts
+                if any(RAGAgent.semantic_score(c) >= threshold for c in artifact.citations)
+            ]
+        else:
+            state.artifacts = []
+
+        state.slots.extracted_features["evidence_assessment"] = assessment
+        gstate["debug_info"]["retrieval"] = assessment
+
+        return {
+            **gstate,
+            "state": state,
+            "rag_assessment": assessment,
+            "rag_attempt": attempts_done,
+        }
+
+    def _route_after_assess(self, gstate: ChatGraphState) -> str:
+        assessment = gstate.get("rag_assessment") or {}
+        return "rag_plan" if assessment.get("retrying") else "responder"
 
     def _responder(self, gstate: ChatGraphState) -> ChatGraphState:
         state = gstate["state"]

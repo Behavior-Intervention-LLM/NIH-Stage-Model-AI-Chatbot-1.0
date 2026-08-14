@@ -83,21 +83,24 @@ class ResponderAgent(BaseAgent):
 
     @staticmethod
     def _collect_evidence(state: SessionState) -> tuple[List[str], List[str], List]:
+        """Gather this turn's retrieved passages.
+
+        The orchestrator has already dropped artifacts whose passages fell
+        below the relevance floor, so anything reaching here is usable — no
+        string-sniffing for "not found" needed. Only real document names go
+        into evidence_sources; the tool name is not a knowledge source.
+        """
         evidence_lines: List[str] = []
         evidence_sources: List[str] = []
         citations = []
 
-        for artifact in state.artifacts[-8:]:
-            if artifact.citations:
-                citations.extend(artifact.citations)
-                for c in artifact.citations:
-                    if c.source and c.source not in evidence_sources:
-                        evidence_sources.append(c.source)
-            if artifact.tool_name and artifact.tool_name not in evidence_sources:
-                evidence_sources.append(artifact.tool_name)
-            if isinstance(artifact.content, str):
-                if "no matching" not in artifact.content.lower() and "not found" not in artifact.content.lower():
-                    evidence_lines.append(artifact.content[:500])
+        for artifact in state.artifacts:
+            for c in artifact.citations:
+                citations.append(c)
+                if c.source and c.source not in evidence_sources:
+                    evidence_sources.append(c.source)
+            if isinstance(artifact.content, str) and artifact.content.strip():
+                evidence_lines.append(artifact.content[:500])
 
         return evidence_lines, evidence_sources, citations
 
@@ -123,6 +126,7 @@ class ResponderAgent(BaseAgent):
         rag_active = len(evidence_lines) > 0 or len(evidence_sources) > 0
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         xf = state.slots.extracted_features
+        assessment = xf.get("evidence_assessment") or {}
         workflow = xf.get("workflow", "navigator")
         workflow_summary = xf.get("workflow_summary") or ""
         workflow_structured = xf.get("workflow_structured_output") or {}
@@ -148,6 +152,18 @@ class ResponderAgent(BaseAgent):
             f"Clarifying question (stage): {xf.get('clarifying_question')}",
             f"Clarifying question (intent): {xf.get('intent_clarifying_question')}",
             f"RAG active: {rag_active}",
+            f"Retrieval verdict: {assessment.get('reason', 'unknown')} "
+            f"(attempts={assessment.get('attempts')}, "
+            f"usable_passages={assessment.get('usable_count', 0)}, "
+            f"best_similarity={assessment.get('best_score')})",
+            (
+                "Retrieval found no relevant passage in the document corpus. Answer "
+                "from general knowledge and say plainly that the corpus does not "
+                "cover this; do not imply the answer is document-grounded and do "
+                "not cite sources."
+                if not rag_active
+                else "Ground claims in the evidence snippets below and name the sources you use."
+            ),
             f"Knowledge sources: {evidence_sources}",
             f"Evidence snippets: {evidence_lines}",
             f"Guardrail warnings: {guardrail_warnings}",

@@ -21,14 +21,16 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000  # Backend (dev mode)
 
 ### Document Ingestion
 ```bash
-python load_documents.py   # Scan data/documents/, chunk, index into TF-IDF vector store
+python load_documents.py            # Rebuild the TF-IDF index from data/documents/ (from scratch)
+python load_documents.py --append   # Index only documents not already present
 ```
 
 ### Test / Verify
 ```bash
-python test_structure.py   # Import smoke tests for all core modules
 curl http://127.0.0.1:8000/health
-python example_usage.py    # Example API usage
+
+# NOTE: test_structure.py and example_usage.py are referenced by older docs but
+# no longer exist in the repo (removed in ff71420). There is currently no test suite.
 ```
 
 ### API
@@ -52,22 +54,34 @@ ChatResponse { reply, session_id, debug_trace? }
 ```
 
 ### LangGraph Orchestration (`app/core/orchestrator.py`)
-(in-progress)-node state machine with conditional routing:
 
 ```
 load_state → intent → [route by intent]
-  ├─ stage flow: stage_reason → [workflow agent] → rag_plan → run_tools → react_judge
-  └─ rag flow:  rag_plan → run_tools → react_judge
-       ↓
-  [react_judge: continue loop OR stop]
-       ↓
-  guardrails → responder → finalize
+  ├─ stage flow: stage_reason → rag_plan
+  └─ rag flow:                  rag_plan
+                                   ↓
+                    rag_plan → run_tools → assess_evidence
+                        ↑                       ↓
+                        └──── retry ────────────┤
+                                                ↓
+                                    responder → finalize
 ```
 
 **Key routing rules:**
-- After `intent`: routes to `stage_reason` (stage/study/grant/mechanism/measure workflows) or `rag_plan` (general Q&A)
-- After `stage_reason`: confidence < 0.75 or stage is None → `clarify_only_gate` (returns clarification without RAG)
-- After `react_judge`: up to 3 ReAct iterations, then forced stop
+- After `intent`: routes to `stage_reason` (stage/workflow questions) or `rag_plan` (general Q&A). Definition queries and chit_chat/admin skip the stage agent.
+- After `assess_evidence`: if the retrieved passages clear neither relevance floor and the attempt budget (`RAG_MAX_ATTEMPTS`, default 2) is not spent, loop back to `rag_plan`, which reformulates the query — via the cheap LLM, falling back to a deterministic keyword rewrite. Otherwise continue to `responder`.
+- Low stage confidence (< 0.75) sets `stage_uncertain_hint`; the responder decides tone and follow-ups. There is no separate clarify gate.
+
+**Evidence handling:** `state.artifacts` holds only the *current* turn's tool
+observations — `_load_state` clears it. When the final verdict is
+insufficient, artifacts are dropped entirely and the responder is told it has
+no grounding, so it answers from general knowledge instead of citing passages
+that do not support the answer.
+
+Agents commented out of the graph (`PlannerAgent`, `MechanismCoachAgent`,
+`StudyBuilderAgent`, `MeasureFinderAgent`, `GrantPartnerAgent`) still exist in
+`app/agents/` but are not wired in. `ChatRequest.workflow` is accepted by the
+API and currently ignored by the graph.
 
 ### Agent Layer (`app/agents/`)
 Each agent wraps an LLM call with a markdown prompt template from `app/prompts/`:
@@ -88,7 +102,10 @@ Each agent wraps an LLM call with a markdown prompt template from `app/prompts/`
 - `ToolRegistry`: plugin-based registration and dispatch
 - `VectorTool` / `VersionedRAGTool`: TF-IDF retrieval from `data/vector_store/`
 - `DBTool`: structured database lookups
-- `SimpleVectorStore` (`vector_store.py`): sklearn TF-IDF backend; no external vector DB
+- `SimpleVectorStore` (`vector_store.py`): hand-rolled TF-IDF over numpy (not sklearn); no external vector DB.
+  Stopwords are dropped at both index and query time, and "Stage II" is
+  normalized to a single `stage_ii` token — without that, the pronoun "I" and
+  "Stage I" collide and question words outrank subject terms.
 
 ### State & Memory (`app/core/`)
 - `state_store.py`: in-memory dict of `SessionState` keyed by `session_id`
