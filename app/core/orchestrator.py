@@ -735,7 +735,7 @@ class Orchestrator:
         # because this is the only place with the caller's identity, the wall
         # clock, and the user's message before _load_state appends uploaded
         # context to it. Returns immediately; all work happens off-thread.
-        feedback.observe_turn(
+        turn_uid = feedback.observe_turn(
             session_id=session_id,
             username=username,
             user_message=user_message,
@@ -747,4 +747,7 @@ class Orchestrator:
         )
 
         debug_info["latency_ms"] = latency_ms
+        # Identifies this turn for an explicit rating. None when feedback is
+        # disabled, in which case the client shows no rating control.
+        debug_info["turn_uid"] = turn_uid
         return reply, debug_info

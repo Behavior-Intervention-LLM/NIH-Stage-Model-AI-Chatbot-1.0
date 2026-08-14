@@ -38,6 +38,8 @@ def _bucket(
             "corrected": 0,
             "retrieval_empty": 0,
             "tool_errors": 0,
+            "thumbs_up": 0,
+            "thumbs_down": 0,
         }
     )
     for turn in turns:
@@ -53,6 +55,12 @@ def _bucket(
         b["corrected"] += 1 if turn.get("corrected") else 0
         b["retrieval_empty"] += 1 if int(turn.get("retrieval_count") or 0) == 0 else 0
         b["tool_errors"] += int(turn.get("tool_errors") or 0)
+        rating = turn.get("explicit_rating")
+        if rating not in (None, ""):
+            if float(rating) > 0:
+                b["thumbs_up"] += 1
+            else:
+                b["thumbs_down"] += 1
     return buckets
 
 
@@ -70,6 +78,8 @@ def _summarise(name_field: str, buckets: Dict[str, Dict[str, Any]]) -> List[Dict
                 "correction_rate": round(b["corrected"] / b["turns"], 3) if b["turns"] else 0.0,
                 "empty_retrieval_rate": round(b["retrieval_empty"] / b["turns"], 3) if b["turns"] else 0.0,
                 "tool_errors": b["tool_errors"],
+                "thumbs_up": b["thumbs_up"],
+                "thumbs_down": b["thumbs_down"],
             }
         )
     rows.sort(key=lambda r: (-r["turns"], r[name_field]))
@@ -83,6 +93,10 @@ def overview(limit: int = 5000) -> Dict[str, Any]:
     judged = [t for t in turns if t.get("judge_overall") is not None]
     behavioural = [t for t in turns if float(t.get("behavioral_confidence") or 0.0) > 0.0]
 
+    rated = [t for t in turns if t.get("explicit_rating") not in (None, "")]
+    thumbs_up = sum(1 for t in rated if float(t["explicit_rating"]) > 0)
+    thumbs_down = len(rated) - thumbs_up
+
     qualities = [float(t.get("quality") or 0.0) for t in scored]
     return {
         "total_turns": len(turns),
@@ -91,6 +105,13 @@ def overview(limit: int = 5000) -> Dict[str, Any]:
         "scored_turns": len(scored),
         "judge_coverage": round(len(judged) / len(turns), 3) if turns else 0.0,
         "behavioural_coverage": round(len(behavioural) / len(turns), 3) if turns else 0.0,
+        # Read the satisfaction rate together with its coverage: ratings are
+        # self-selected, so a high rate over 2% of turns says little.
+        "rating_coverage": round(len(rated) / len(turns), 3) if turns else 0.0,
+        "rated_turns": len(rated),
+        "thumbs_up": thumbs_up,
+        "thumbs_down": thumbs_down,
+        "satisfaction_rate": round(thumbs_up / len(rated), 3) if rated else None,
         "mean_quality": _mean(qualities),
         "good_turns": sum(1 for q in qualities if q >= scoring.GOOD_THRESHOLD),
         "bad_turns": sum(1 for q in qualities if q <= scoring.BAD_THRESHOLD),
@@ -197,6 +218,8 @@ def response_ranking(
                 "user_need_met": turn.get("user_need_met"),
                 "inferred_user_need": turn.get("inferred_user_need"),
                 "rationale": turn.get("rationale"),
+                "explicit_rating": turn.get("explicit_rating"),
+                "rating_comment": turn.get("rating_comment"),
                 "rephrased": bool(turn.get("rephrased")),
                 "corrected": bool(turn.get("corrected")),
                 "workflow": turn.get("workflow"),
@@ -206,6 +229,66 @@ def response_ranking(
             }
         )
     return rows
+
+
+def rating_summary(limit: int = 5000) -> Dict[str, Any]:
+    """Explicit-rating totals, overall and split by feature.
+
+    The per-feature split is what makes ratings actionable: "thumbs-down
+    concentrates in stage_classification" is a lead, a global score is not.
+    Buckets with very few ratings are still shown — with their counts — rather
+    than hidden behind a minimum, because at these volumes a suppressed bucket
+    is more misleading than a small one.
+    """
+    turns = _load(limit)
+    rated = [t for t in turns if t.get("explicit_rating") not in (None, "")]
+
+    def split(key_fn: Callable[[Dict[str, Any]], Optional[str]]) -> List[Dict[str, Any]]:
+        buckets: Dict[str, Dict[str, int]] = defaultdict(lambda: {"up": 0, "down": 0, "turns": 0})
+        for turn in turns:
+            key = key_fn(turn)
+            if not key:
+                continue
+            buckets[key]["turns"] += 1
+            value = turn.get("explicit_rating")
+            if value in (None, ""):
+                continue
+            if float(value) > 0:
+                buckets[key]["up"] += 1
+            else:
+                buckets[key]["down"] += 1
+
+        rows = []
+        for name, b in buckets.items():
+            n = b["up"] + b["down"]
+            rows.append(
+                {
+                    "name": name,
+                    "turns": b["turns"],
+                    "rated": n,
+                    "thumbs_up": b["up"],
+                    "thumbs_down": b["down"],
+                    "satisfaction_rate": round(b["up"] / n, 3) if n else None,
+                    "rating_coverage": round(n / b["turns"], 3) if b["turns"] else 0.0,
+                }
+            )
+        # Most-complained-about first, then by volume.
+        rows.sort(key=lambda r: (-r["thumbs_down"], -r["rated"], r["name"]))
+        return rows
+
+    up = sum(1 for t in rated if float(t["explicit_rating"]) > 0)
+    return {
+        "rated_turns": len(rated),
+        "total_turns": len(turns),
+        "rating_coverage": round(len(rated) / len(turns), 3) if turns else 0.0,
+        "thumbs_up": up,
+        "thumbs_down": len(rated) - up,
+        "satisfaction_rate": round(up / len(rated), 3) if rated else None,
+        "with_comments": sum(1 for t in rated if (t.get("rating_comment") or "").strip()),
+        "by_workflow": split(lambda t: t.get("workflow") or "unknown"),
+        "by_query_type": split(lambda t: t.get("query_type") or "unknown"),
+        "by_stage": split(lambda t: f"Stage {t['stage']}" if t.get("stage") else None),
+    }
 
 
 def source_ranking() -> List[Dict[str, Any]]:

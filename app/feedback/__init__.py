@@ -1,26 +1,35 @@
 """
-Implicit feedback system.
+Feedback system.
 
-The system infers how well it is serving people instead of asking them. There
-is no thumbs up/down anywhere in the UI, and none is planned: explicit ratings
-are given by a self-selecting minority, mostly when they are annoyed, and they
-train the model to be agreeable rather than useful.
+How well the system is serving people is measured from three streams:
 
-Two evidence streams replace the rating widget:
-
+    ratings.     an explicit thumbs up/down with an optional comment, written
+                 by the user -- the only stream that is stated rather than
+                 inferred, and by far the sparsest
     signals.py   what the user did next (re-asked, corrected, thanked, built
                  on the answer, left) -- sparse but it is ground truth
     judge.py     an LLM grading each answer against the passages that answer
                  actually retrieved -- dense, but a model marking its own work
 
-scoring.py fuses them into one quality number per turn. rankings.py aggregates
-those into the four rankings. adaptation.py feeds them back: documents that
-keep appearing in bad answers get demoted in retrieval, and topics the system
-keeps fumbling get recorded as knowledge gaps.
+The inferred streams exist because ratings are self-selected: they are left
+mostly by people who are annoyed or delighted, so treating them as the only
+measure both undersamples ordinary turns and pulls toward agreeableness. They
+are therefore weighted to decide the sign of a turn's quality without erasing
+the other two (see scoring.EXPLICIT_WEIGHT), and rating coverage is reported
+alongside every aggregate so the sampling bias stays visible.
 
-Entry point: `observe_turn()`, called once per turn by the orchestrator. It
-returns immediately and does all its work on a daemon thread, so a failure
-here can slow down or break exactly nothing in the chat path.
+scoring.py fuses them into one quality number per turn. rankings.py aggregates
+those into the rankings. adaptation.py feeds them back: documents that keep
+appearing in bad answers get demoted in retrieval, and topics the system keeps
+fumbling get recorded as knowledge gaps.
+
+Entry points:
+    observe_turn()   called once per turn by the orchestrator. Returns the
+                     turn_uid immediately and does all its work on a daemon
+                     thread, so a failure here can slow down or break exactly
+                     nothing in the chat path. The turn_uid is what a client
+                     later quotes to attach a rating.
+    record_rating()  called when a user clicks a thumb.
 
 Note on imports: submodules are imported lazily inside functions. judge.py and
 adaptation.py import `from app.feedback import ...`, so a module-level import
@@ -63,11 +72,13 @@ def _observe_sync(
     sources: List[Dict[str, Any]],
     tool_errors: int,
     latency_ms: int,
+    turn_uid: str,
 ) -> Optional[str]:
     """Record, derive, judge, adapt. Runs off the request path."""
     from app.feedback import adaptation, judge as judge_module, signals, store
 
     turn_uid = store.record_turn(
+        turn_uid=turn_uid,
         session_id=session_id,
         username=username,
         user_message=user_message,
@@ -121,14 +132,22 @@ def observe_turn(
     tool_errors: int = 0,
     latency_ms: int = 0,
     blocking: bool = False,
-) -> None:
+) -> Optional[str]:
     """Observe one completed turn. Never raises, never blocks by default.
+
+    Returns the turn_uid so the caller can pass it to the client, which needs
+    it to attach a rating later. The id is minted here rather than by the
+    background write, so it is available immediately and stays stable.
 
     Set blocking=True only in tests, where a daemon thread would race the
     assertions.
     """
     if not is_enabled():
-        return
+        return None
+
+    from app.feedback import store
+
+    turn_uid = store.new_turn_uid()
 
     kwargs = dict(
         session_id=session_id,
@@ -139,6 +158,7 @@ def observe_turn(
         sources=sources or [],
         tool_errors=int(tool_errors or 0),
         latency_ms=int(latency_ms or 0),
+        turn_uid=turn_uid,
     )
 
     def _run():
@@ -150,9 +170,56 @@ def observe_turn(
 
     if blocking:
         _run()
-        return
+        return turn_uid
 
     threading.Thread(target=_run, daemon=True, name="feedback-observe").start()
+    return turn_uid
 
 
-__all__ = ["observe_turn", "is_enabled", "is_admin"]
+def record_rating(
+    *,
+    turn_uid: str,
+    username: str,
+    rating: Optional[int],
+    comment: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Attach (or clear) an explicit rating for a turn.
+
+    `rating` is +1, -1, or None to withdraw a previous rating. Raises
+    PermissionError if the turn is owned by someone else, and ValueError on a
+    bad rating value — callers map those onto 403/400.
+
+    The ownership check passes when the turn row does not exist yet: the turn
+    is written on a background thread, so a fast click can arrive first. The
+    turn_uid is an unguessable uuid4 handed only to the user who produced the
+    turn, so it is what authorises the write.
+    """
+    from app.feedback import store
+
+    if not is_enabled():
+        raise RuntimeError("Feedback system is disabled (FEEDBACK_ENABLED=false).")
+
+    owner = store.turn_owner(turn_uid)
+    if owner is not None and owner != store._normalize_username(username or "anonymous"):
+        raise PermissionError("That turn belongs to another user.")
+
+    if rating is None:
+        removed = store.clear_rating(turn_uid)
+        return {"turn_uid": turn_uid, "rating": None, "comment": None, "cleared": removed}
+
+    return store.save_rating(turn_uid, username, int(rating), comment)
+
+
+def get_rating(turn_uid: str) -> Optional[Dict[str, Any]]:
+    from app.feedback import store
+
+    return store.get_rating(turn_uid)
+
+
+__all__ = [
+    "observe_turn",
+    "record_rating",
+    "get_rating",
+    "is_enabled",
+    "is_admin",
+]

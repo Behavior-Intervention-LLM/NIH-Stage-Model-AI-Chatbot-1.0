@@ -181,4 +181,15 @@ class ChatResponse(BaseModel):
     reply: str
     debug: Dict[str, Any] = Field(default_factory=dict)  # Debug info
     citations: List[Citation] = Field(default_factory=list)  # Reference
-    next_question: Optional[str] = None  # 
+    next_question: Optional[str] = None  #
+    # Quote this to POST /feedback/rating. None when feedback is disabled or
+    # the turn never reached the orchestrator (e.g. a guardrail rejection).
+    turn_uid: Optional[str] = None
+
+
+class RatingRequest(BaseModel):
+    """Explicit thumbs up/down on one answer, with an optional comment."""
+    turn_uid: str
+    # +1 thumbs up, -1 thumbs down, null to withdraw a previous rating.
+    rating: Optional[Literal[-1, 1]] = None
+    comment: Optional[str] = None

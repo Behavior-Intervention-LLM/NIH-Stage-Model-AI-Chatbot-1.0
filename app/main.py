@@ -8,13 +8,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from app.config import settings
 from app.logging_config import logger
-from app.core.types import ChatRequest, ChatResponse
+from app.core.types import ChatRequest, ChatResponse, RatingRequest
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
 from app import feedback
 from app.feedback import adaptation as feedback_adaptation
 from app.feedback import judge as feedback_judge
 from app.feedback import rankings as feedback_rankings
+from app.feedback import store as feedback_store
 from app.tools import tool_registry
 import auth as user_auth
 import chat_history
@@ -150,7 +151,8 @@ async def chat(request: ChatRequest, username: str = Depends(require_auth)):
         response = ChatResponse(
             session_id=session_id,
             reply=reply,
-            debug=debug_info
+            debug=debug_info,
+            turn_uid=debug_info.get("turn_uid"),
         )
 
         logger.info(f"Chat: session={response.session_id}, reply_len={len(reply)}")
@@ -189,6 +191,44 @@ async def delete_conversation(
     if not chat_history.delete_conversation(username, conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"status": "deleted"}
+
+
+@app.post("/feedback/rating")
+async def submit_rating(
+    request: RatingRequest, username: str = Depends(require_auth)
+):
+    """Record a thumbs up/down (and optional comment) on one answer.
+
+    `turn_uid` comes from the chat response that produced the answer.
+
+    Send rating=null to withdraw a previous rating. Re-rating the same turn
+    overwrites, so this is safe to call repeatedly from a toggle.
+
+    The write replaces the whole rating: an omitted `comment` clears any
+    comment already stored. Resend it alongside the rating to keep it.
+    """
+    try:
+        return feedback.record_rating(
+            turn_uid=request.turn_uid,
+            username=username,
+            rating=request.rating,
+            comment=request.comment,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/feedback/rating/{turn_uid}")
+async def read_rating(turn_uid: str, username: str = Depends(require_auth)):
+    """Current rating for a turn the caller owns, or null."""
+    owner = feedback_store.turn_owner(turn_uid)
+    if owner is not None and owner != username.strip().lower():
+        raise HTTPException(status_code=403, detail="That turn belongs to another user.")
+    return {"turn_uid": turn_uid, "rating": feedback.get_rating(turn_uid)}
 
 
 def require_admin(username: str = Depends(require_auth)) -> str:
@@ -245,6 +285,20 @@ async def analytics_sources(_: str = Depends(require_admin)):
 async def analytics_needs(_: str = Depends(require_admin)):
     """What the system has inferred users are actually trying to accomplish."""
     return {"needs": feedback_rankings.inferred_user_needs()}
+
+
+@app.get("/analytics/ratings")
+async def analytics_ratings(
+    limit: int = 200, comments_only: bool = False, _: str = Depends(require_admin)
+):
+    """Explicit user ratings, newest first. comments_only=true is the queue
+    of answers someone took the trouble to write about."""
+    return {
+        "summary": feedback_rankings.rating_summary(),
+        "ratings": feedback_store.rating_rows(
+            limit=max(1, min(limit, 1000)), only_with_comments=comments_only
+        ),
+    }
 
 
 @app.get("/analytics/gaps")

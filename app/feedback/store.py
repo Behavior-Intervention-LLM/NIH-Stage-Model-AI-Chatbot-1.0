@@ -38,6 +38,7 @@ MAX_MESSAGE_CHARS = 4000
 MAX_REPLY_CHARS = 8000
 MAX_PASSAGE_CHARS = 600
 MAX_STORED_SOURCES = 6
+MAX_COMMENT_CHARS = 2000
 
 _initialised = False
 
@@ -45,6 +46,11 @@ _initialised = False
 def utcnow_text() -> str:
     """Microsecond precision so ORDER BY created_at is stable within a second."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def new_turn_uid() -> str:
+    """Mint a turn id. Unguessable, because it is what authorises a rating."""
+    return uuid.uuid4().hex
 
 
 def init_db() -> None:
@@ -118,6 +124,20 @@ def init_db() -> None:
             updated_at TEXT NOT NULL
         )
     """
+    # Explicit user ratings. Deliberately NOT a foreign key on feedback_turns:
+    # the turn row is written on a background thread, so a fast click can land
+    # here first. The joins that read this are LEFT JOINs, so a rating that
+    # briefly precedes its turn resolves as soon as the turn lands.
+    ratings_ddl = """
+        CREATE TABLE IF NOT EXISTS feedback_ratings (
+            turn_uid TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            rating INTEGER NOT NULL,
+            comment TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """
     gaps_ddl = """
         CREATE TABLE IF NOT EXISTS feedback_gaps (
             topic_key TEXT PRIMARY KEY,
@@ -131,7 +151,7 @@ def init_db() -> None:
     """
 
     with _db() as conn:
-        for ddl in (turns_ddl, signals_ddl, judgements_ddl, sources_ddl, gaps_ddl):
+        for ddl in (turns_ddl, signals_ddl, judgements_ddl, sources_ddl, ratings_ddl, gaps_ddl):
             conn.execute(ddl)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_feedback_turns_session "
@@ -168,10 +188,16 @@ def record_turn(
     sources: Optional[List[Dict[str, Any]]] = None,
     tool_errors: int = 0,
     latency_ms: int = 0,
+    turn_uid: Optional[str] = None,
 ) -> str:
-    """Append one observed turn and return its turn_uid."""
+    """Append one observed turn and return its turn_uid.
+
+    `turn_uid` may be supplied by the caller so the id can be handed to the
+    client in the chat response while this row is still being written on the
+    background thread — the client needs it to attach a rating.
+    """
     init_db()
-    turn_uid = uuid.uuid4().hex
+    turn_uid = turn_uid or new_turn_uid()
     username = _normalize_username(username or "anonymous")
     trimmed_sources = [
         {
@@ -260,6 +286,92 @@ def save_signals(turn_uid: str, signals: Dict[str, Any]) -> None:
                 utcnow_text(),
             ),
         )
+
+
+def save_rating(
+    turn_uid: str, username: str, rating: int, comment: Optional[str] = None
+) -> Dict[str, Any]:
+    """Upsert an explicit thumbs up/down (+1/-1) and optional comment.
+
+    Re-rating the same turn overwrites: a user changing their mind is a
+    correction, not a second opinion.
+    """
+    init_db()
+    if rating not in (1, -1):
+        raise ValueError("rating must be 1 (up) or -1 (down)")
+
+    username = _normalize_username(username or "anonymous")
+    comment = (comment or "").strip()[:MAX_COMMENT_CHARS] or None
+    now = utcnow_text()
+
+    with _db() as conn:
+        conn.execute(
+            _sql(
+                "INSERT INTO feedback_ratings ("
+                "  turn_uid, username, rating, comment, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (turn_uid) DO UPDATE SET "
+                "  rating = excluded.rating,"
+                "  comment = excluded.comment,"
+                "  updated_at = excluded.updated_at"
+            ),
+            (turn_uid, username, int(rating), comment, now, now),
+        )
+    return {"turn_uid": turn_uid, "rating": int(rating), "comment": comment}
+
+
+def clear_rating(turn_uid: str) -> bool:
+    """Remove a rating (user un-clicks). Returns whether a row was removed."""
+    init_db()
+    with _db() as conn:
+        cur = conn.execute(
+            _sql("DELETE FROM feedback_ratings WHERE turn_uid = ?"), (turn_uid,)
+        )
+        return bool(getattr(cur, "rowcount", 0))
+
+
+def get_rating(turn_uid: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with _db() as conn:
+        row = conn.execute(
+            _sql("SELECT * FROM feedback_ratings WHERE turn_uid = ?"), (turn_uid,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def turn_owner(turn_uid: str) -> Optional[str]:
+    """Username that owns a turn, or None when the row is not written yet."""
+    init_db()
+    with _db() as conn:
+        row = conn.execute(
+            _sql("SELECT username FROM feedback_turns WHERE turn_uid = ?"), (turn_uid,)
+        ).fetchone()
+    return row["username"] if row else None
+
+
+def rating_rows(limit: int = 200, only_with_comments: bool = False) -> List[Dict[str, Any]]:
+    """Ratings joined to their turn, newest first — the review queue."""
+    init_db()
+    where = "WHERE r.comment IS NOT NULL AND r.comment <> ''" if only_with_comments else ""
+    with _db() as conn:
+        rows = conn.execute(
+            _sql(
+                "SELECT r.turn_uid, r.username, r.rating, r.comment, r.updated_at,"
+                "  t.user_message, t.reply, t.workflow, t.query_type, t.stage,"
+                "  t.sources, t.created_at "
+                "FROM feedback_ratings r "
+                "LEFT JOIN feedback_turns t ON t.turn_uid = r.turn_uid "
+                f"{where} "
+                "ORDER BY r.updated_at DESC LIMIT ?"
+            ),
+            (int(limit),),
+        ).fetchall()
+    out = []
+    for r in rows:
+        row = dict(r)
+        row["sources"] = _loads(row.get("sources"), [])
+        out.append(row)
+    return out
 
 
 def save_judgement(turn_uid: str, judgement: Dict[str, Any], model: str) -> None:
@@ -410,10 +522,13 @@ def scored_turns(limit: int = 5000) -> List[Dict[str, Any]]:
                 "  s.behavioral_score, s.confidence AS behavioral_confidence,"
                 "  s.rephrased, s.corrected, s.accepted, s.abandoned,"
                 "  j.overall AS judge_overall, j.groundedness, j.relevance,"
-                "  j.user_need_met, j.inferred_user_need, j.rationale "
+                "  j.user_need_met, j.inferred_user_need, j.rationale,"
+                "  r.rating AS explicit_rating, r.comment AS rating_comment,"
+                "  r.updated_at AS rated_at "
                 "FROM feedback_turns t "
                 "LEFT JOIN feedback_signals s ON s.turn_uid = t.turn_uid "
                 "LEFT JOIN feedback_judgements j ON j.turn_uid = t.turn_uid "
+                "LEFT JOIN feedback_ratings r ON r.turn_uid = t.turn_uid "
                 "ORDER BY t.created_at DESC LIMIT ?"
             ),
             (int(limit),),
@@ -480,6 +595,15 @@ def purge_user(username: str) -> None:
                 "(SELECT turn_uid FROM feedback_turns WHERE username = ?)"
             ),
             (username,),
+        )
+        # Ratings are matched on their own username column too, so a rating
+        # that outlived its turn row is still erased.
+        conn.execute(
+            _sql(
+                "DELETE FROM feedback_ratings WHERE username = ? OR turn_uid IN "
+                "(SELECT turn_uid FROM feedback_turns WHERE username = ?)"
+            ),
+            (username, username),
         )
         conn.execute(
             _sql("DELETE FROM feedback_turns WHERE username = ?"), (username,)

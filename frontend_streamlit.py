@@ -421,12 +421,15 @@ def render_analytics_page():
     from app.feedback import adaptation as fb_adaptation
     from app.feedback import judge as fb_judge
     from app.feedback import rankings as fb_rankings
+    from app.feedback import store as fb_store
 
     st.title("📊 Feedback & Usage Analytics")
     st.caption(
-        "Quality here is **inferred**, never asked for. It fuses what users did next "
-        "(re-asked, corrected, thanked, built on the answer) with an LLM judge grading "
-        "each answer against the passages it actually retrieved. Scale is −1 to +1."
+        "Quality fuses three streams: the 👍/👎 users leave on an answer, what they did "
+        "next (re-asked, corrected, thanked, built on it), and an LLM judge grading each "
+        "answer against the passages it actually retrieved. A stated rating outweighs "
+        "both inferred streams but does not replace them — ratings are self-selected, so "
+        "coverage is reported next to every rate. Scale is −1 to +1."
     )
 
     overview = fb_rankings.overview()
@@ -446,6 +449,20 @@ def render_analytics_page():
     c3.metric("Judge coverage", f"{overview['judge_coverage']:.0%}")
     c4.metric("Behavioural coverage", f"{overview['behavioural_coverage']:.0%}")
 
+    c1, c2, c3, c4 = st.columns(4)
+    sat = overview.get("satisfaction_rate")
+    c1.metric("👍 Thumbs up", overview.get("thumbs_up", 0))
+    c2.metric("👎 Thumbs down", overview.get("thumbs_down", 0))
+    c3.metric("Satisfaction", f"{sat:.0%}" if sat is not None else "—")
+    c4.metric("Rating coverage", f"{overview.get('rating_coverage', 0.0):.0%}")
+    if overview.get("rated_turns"):
+        st.caption(
+            f"Satisfaction is over the {overview['rated_turns']} turns that were rated "
+            f"({overview.get('rating_coverage', 0.0):.0%} of all turns). Ratings are "
+            "self-selected, so read the rate together with its coverage — a high rate "
+            "over a handful of turns is not a measurement of anything."
+        )
+
     if overview["scored_turns"] < overview["total_turns"]:
         st.caption(
             f"{overview['scored_turns']} of {overview['total_turns']} turns carry enough "
@@ -454,7 +471,7 @@ def render_analytics_page():
         )
 
     tabs = st.tabs(
-        ["Responses", "Features", "Users", "Documents", "Inferred needs", "Knowledge gaps"]
+        ["Responses", "Ratings", "Features", "Users", "Documents", "Inferred needs", "Knowledge gaps"]
     )
 
     with tabs[0]:
@@ -498,6 +515,63 @@ def render_analytics_page():
                     st.caption("Retrieved from: " + ", ".join(str(s) for s in row["sources"]))
 
     with tabs[1]:
+        st.subheader("Explicit user ratings")
+        summary = fb_rankings.rating_summary()
+        if not summary["rated_turns"]:
+            st.info(
+                "No ratings yet. The 👍/👎 buttons under each answer in the chat feed "
+                "this tab."
+            )
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Rated turns", summary["rated_turns"])
+            c2.metric("👍 / 👎", f"{summary['thumbs_up']} / {summary['thumbs_down']}")
+            sat = summary["satisfaction_rate"]
+            c3.metric("Satisfaction", f"{sat:.0%}" if sat is not None else "—")
+            c4.metric("With comments", summary["with_comments"])
+
+            st.markdown("**Where thumbs-down concentrates**")
+            st.caption(
+                "A global satisfaction number is not actionable; the split is. "
+                "Low-volume buckets are shown with their counts rather than hidden, "
+                "since at these volumes a suppressed bucket misleads more than a small one."
+            )
+            for label, key in [
+                ("By query type", "by_query_type"),
+                ("By workflow", "by_workflow"),
+                ("By stage", "by_stage"),
+            ]:
+                rows = [r for r in summary[key] if r["rated"]]
+                if rows:
+                    st.markdown(f"*{label}*")
+                    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+            st.markdown("**What people wrote**")
+            comments = fb_store.rating_rows(limit=100, only_with_comments=True)
+            if not comments:
+                st.caption("No written comments yet.")
+            for row in comments:
+                thumb = "👍" if int(row["rating"]) > 0 else "👎"
+                question = (row.get("user_message") or "(turn not recorded)")[:80]
+                with st.expander(f"{thumb} {question}"):
+                    st.markdown(f"**Comment:** {row['comment']}")
+                    st.caption(
+                        f"{row['username']} · {row['updated_at']} · "
+                        f"workflow={row.get('workflow')} · query_type={row.get('query_type')}"
+                    )
+                    if row.get("reply"):
+                        st.text_area(
+                            "Answer that was rated",
+                            value=row["reply"],
+                            height=140,
+                            disabled=True,
+                            key=f"rated_reply_{row['turn_uid']}",
+                        )
+                    sources = [s.get("source") for s in (row.get("sources") or [])]
+                    if sources:
+                        st.caption(f"Sources: {', '.join(str(s) for s in sources)}")
+
+    with tabs[2]:
         st.subheader("Ranking of use")
         features = fb_rankings.feature_ranking()
         for label, key in [
@@ -509,11 +583,11 @@ def render_analytics_page():
             st.markdown(f"**{label}**")
             st.dataframe(features[key], use_container_width=True, hide_index=True)
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("Ranking of user usage")
         st.dataframe(fb_rankings.user_ranking(), use_container_width=True, hide_index=True)
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Document standing (the closed loop)")
         st.caption(
             "`weight` multiplies each document's retrieval ranking score. It stays at "
@@ -530,7 +604,7 @@ def render_analytics_page():
         if st.button("⚖️ Judge any ungraded turns"):
             st.success(f"Graded {fb_judge.judge.judge_pending(limit=50)} turn(s).")
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("What the system thinks users want")
         st.caption(
             "Reconstructed by the judge from each exchange — nobody was asked. "
@@ -542,7 +616,7 @@ def render_analytics_page():
         else:
             st.info("No inferred needs recorded yet (the judge may be disabled).")
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("Knowledge gaps")
         st.caption("Recurring questions answered badly — the ingestion to-do list.")
         gaps = fb_rankings.knowledge_gaps()
@@ -809,6 +883,82 @@ if st.session_state.current_page == "analytics":
     render_analytics_page()
     st.stop()
 
+def render_rating_controls(message: dict) -> None:
+    """Thumbs up/down plus an optional comment, under one assistant answer.
+
+    Renders nothing without a turn_uid — that is the case for guardrail
+    rejections, for answers produced while FEEDBACK_ENABLED was off, and for
+    conversations reloaded from the database (history stores only role and
+    content, so the id is not recoverable).
+
+    The rating is written straight to app.feedback, for the same reason the
+    analytics page reads the tables directly: this frontend is often deployed
+    without a separate backend.
+    """
+    turn_uid = message.get("turn_uid")
+    if not turn_uid:
+        return
+
+    from app import feedback as fb
+
+    current = message.get("rating")
+    saved_comment = message.get("rating_comment") or ""
+
+    def _write(rating, comment=None):
+        try:
+            fb.record_rating(
+                turn_uid=turn_uid,
+                username=_history_username(),
+                rating=rating,
+                comment=comment,
+            )
+            message["rating"] = rating
+            message["rating_comment"] = comment
+            sync_active_conversation_messages()
+        except Exception as exc:
+            st.warning(f"Could not save feedback: {exc}")
+
+    up_col, down_col, status_col = st.columns([1, 1, 10])
+    with up_col:
+        # Clicking the active thumb again withdraws the rating.
+        if st.button(
+            "👍",
+            key=f"rate_up_{turn_uid}",
+            type="primary" if current == 1 else "secondary",
+            help="This answer was useful",
+        ):
+            _write(None if current == 1 else 1, saved_comment or None)
+            st.rerun()
+    with down_col:
+        if st.button(
+            "👎",
+            key=f"rate_down_{turn_uid}",
+            type="primary" if current == -1 else "secondary",
+            help="This answer was not useful",
+        ):
+            _write(None if current == -1 else -1, saved_comment or None)
+            st.rerun()
+    with status_col:
+        if current == 1:
+            st.caption("Thanks — recorded as helpful.")
+        elif current == -1:
+            st.caption("Thanks — recorded as not helpful. A comment helps us fix it.")
+
+    if current is not None:
+        with st.expander("💬 Add a comment (optional)", expanded=False):
+            text = st.text_area(
+                "What was good or wrong about this answer?",
+                value=saved_comment,
+                key=f"rate_comment_{turn_uid}",
+                height=90,
+                label_visibility="collapsed",
+                placeholder="e.g. it cited the 1997 paper but my question was about the 2025 revision",
+            )
+            if st.button("Submit comment", key=f"rate_comment_submit_{turn_uid}"):
+                _write(current, text)
+                st.success("Comment saved.")
+
+
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
 render_workflow_cards()
@@ -829,6 +979,8 @@ for message in st.session_state.messages:
                 st.json(message["debug"])
         if st.session_state.show_thinking_trace and message.get("debug"):
             render_thinking_trace(message.get("debug") or {})
+        if message["role"] == "assistant":
+            render_rating_controls(message)
 
 uploaded_files = st.file_uploader(
     "Attach Files Here",
@@ -955,10 +1107,16 @@ if user_input:
                         "content": reply,
                         "timestamp": datetime.now().isoformat(),
                         "debug": debug_info,
+                        # Identifies this turn for an explicit rating.
+                        "turn_uid": debug_info.get("turn_uid"),
                     }
                     st.session_state.messages.append(assistant_message)
                     sync_active_conversation_messages()
                     _record_exchange(user_input, reply)
+                    # This message was appended after the history loop ran, so
+                    # its controls are drawn here; later reruns draw them in
+                    # the loop instead.
+                    render_rating_controls(assistant_message)
 
             except Exception as exc:
                 st.error(f"❌ Error: {str(exc)}")

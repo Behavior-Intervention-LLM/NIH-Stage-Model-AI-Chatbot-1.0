@@ -34,7 +34,11 @@ curl http://127.0.0.1:8000/health
 ```
 
 ### API
-- Backend: `http://localhost:8000` (single endpoint: `POST /chat`)
+- Backend: `http://localhost:8000`
+  - `POST /chat` — main endpoint. Returns `turn_uid`, which identifies the answer for rating.
+  - `POST /feedback/rating` — thumbs up/down (`rating`: `1`, `-1`, or `null` to withdraw) plus optional `comment`, keyed by `turn_uid`. Overwrites on repeat; owner-checked.
+  - `GET /feedback/rating/{turn_uid}` — current rating for a turn the caller owns.
+  - `GET /analytics/*` — admin-only (`ANALYTICS_ADMIN_USERS`), incl. `/analytics/ratings`.
 - Swagger docs: `http://localhost:8000/docs`
 - Frontend: `http://localhost:8501`
 
