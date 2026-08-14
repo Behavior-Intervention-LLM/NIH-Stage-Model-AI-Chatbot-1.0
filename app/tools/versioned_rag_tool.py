@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from app.config import settings
 from app.core.types import Citation, ToolResult
+from app.feedback.adaptation import source_weight_lookup
 from app.tools.base import BaseTool
 from app.tools.vector_store import SimpleVectorStore
 
@@ -98,13 +99,23 @@ class VersionedRAGTool(BaseTool):
                     return 0.5
                 return (y - min_year) / (max_year - min_year)
 
+            # Learned per-document weights from the implicit feedback loop.
+            # Neutral ({}) when the feature is off or nothing has been learned
+            # yet, so ranking behaviour is unchanged on a fresh install.
+            feedback_weights = source_weight_lookup()
+
             for row in enriched:
                 row["recency_score"] = recency_score(row["year"])
-                row["final_score"] = (
+                base_score = (
                     0.72 * row["semantic_score"]
                     + 0.22 * row["recency_score"]
                     + row["revision_boost"]
                 )
+                # Multiplicative and tightly clamped upstream, so feedback can
+                # reorder near-ties but never float a weak match above a
+                # strong one.
+                row["feedback_weight"] = float(feedback_weights.get(row["source"], 1.0))
+                row["final_score"] = base_score * row["feedback_weight"]
 
             enriched.sort(key=lambda x: x["final_score"], reverse=True)
             selected = enriched[:top_k]
@@ -158,6 +169,7 @@ class VersionedRAGTool(BaseTool):
                             "recency_score": row["recency_score"],
                             "year": row["year"],
                             "revision_boost": row["revision_boost"],
+                            "feedback_weight": row.get("feedback_weight", 1.0),
                         },
                     )
                 )

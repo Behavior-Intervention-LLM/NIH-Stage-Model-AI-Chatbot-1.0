@@ -65,6 +65,26 @@ class Settings(BaseSettings):
     VECTOR_DB_URL: Optional[str] = os.getenv("VECTOR_DB_URL")
     VECTOR_DB_API_KEY: Optional[str] = os.getenv("VECTOR_DB_API_KEY")
 
+    # Implicit feedback system (app/feedback/) — no human ratings are collected.
+    FEEDBACK_ENABLED: bool = os.getenv("FEEDBACK_ENABLED", "True").lower() == "true"
+    # LLM-as-judge pass over each completed turn. Runs off the request path.
+    FEEDBACK_JUDGE_ENABLED: bool = os.getenv("FEEDBACK_JUDGE_ENABLED", "True").lower() == "true"
+    # Falls back to LLM_INTENT_MODEL (cheap, non-reasoning) when unset.
+    FEEDBACK_JUDGE_MODEL: Optional[str] = os.getenv("FEEDBACK_JUDGE_MODEL")
+    # Let learned document weights influence retrieval ranking.
+    FEEDBACK_ADAPTIVE_RETRIEVAL: bool = os.getenv("FEEDBACK_ADAPTIVE_RETRIEVAL", "True").lower() == "true"
+    # A document needs this many scored turns before its weight leaves 1.0.
+    FEEDBACK_MIN_OBSERVATIONS: int = int(os.getenv("FEEDBACK_MIN_OBSERVATIONS", "3"))
+    # Weights are clamped to [1 - span, 1 + span]: learned preference breaks
+    # near-ties, it never overrides a strong semantic match.
+    FEEDBACK_WEIGHT_SPAN: float = float(os.getenv("FEEDBACK_WEIGHT_SPAN", "0.4"))
+    FEEDBACK_WEIGHT_GAIN: float = float(os.getenv("FEEDBACK_WEIGHT_GAIN", "1.5"))
+    # Full relearn cadence, in turns. 0 disables automatic recomputation.
+    FEEDBACK_RECOMPUTE_EVERY_TURNS: int = int(os.getenv("FEEDBACK_RECOMPUTE_EVERY_TURNS", "25"))
+    # Comma-separated usernames allowed to read /analytics/*. When unset,
+    # access requires AUTH_DISABLED (local dev only).
+    ANALYTICS_ADMIN_USERS: str = os.getenv("ANALYTICS_ADMIN_USERS", "")
+
     # AWS S3 storage (optional — used to sync data/ on container startup)
     AWS_ACCESS_KEY_ID: Optional[str] = os.getenv("AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv("AWS_SECRET_ACCESS_KEY")

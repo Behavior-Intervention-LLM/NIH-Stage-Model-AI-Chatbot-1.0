@@ -1,10 +1,12 @@
 """Simplified implicit-intent orchestrator (LangGraph) for /chat only."""
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app import feedback
 from app.agents.base import BaseAgent
 # from app.agents.grant_partner_agent import GrantPartnerAgent
 from app.agents.intent_agent import IntentAgent
@@ -52,6 +54,11 @@ class ChatGraphState(TypedDict, total=False):
     # max_react_steps: int
     react_last_planned_tools: int
     tool_results_count: int
+
+    # Retrieval observed on THIS turn only. state.artifacts accumulates across
+    # the whole session, so it cannot be used to attribute credit per turn.
+    turn_sources: List[Dict[str, Any]]
+    turn_tool_errors: int
 
 
 
@@ -410,11 +417,21 @@ class Orchestrator:
         )
 
         count = 0
+        turn_sources: List[Dict[str, Any]] = []
+        tool_errors = 0
         for tool_call in pending:
             try:
                 artifact = self.tool_registry.run_tool(tool_call.tool_name, tool_call.tool_args)
                 state.artifacts.append(artifact)
                 count += 1
+                for citation in artifact.citations:
+                    turn_sources.append(
+                        {
+                            "source": citation.source,
+                            "score": citation.relevance_score,
+                            "passage": citation.passage,
+                        }
+                    )
                 self._trace(
                     gstate,
                     {
@@ -425,11 +442,16 @@ class Orchestrator:
                     },
                 )
             except Exception as exc:
+                tool_errors += 1
                 gstate["debug_info"][f"tool_error_{tool_call.tool_name}"] = str(exc)
                 self._trace(
                     gstate,
                     {"kind": "tool", "name": tool_call.tool_name, "success": False, "error": str(exc)},
                 )
+
+        # Best-scoring citations first, so per-source credit assignment sees
+        # the passages that actually drove the answer.
+        turn_sources.sort(key=lambda s: float(s.get("score") or 0.0), reverse=True)
 
         gstate["debug_info"]["tools_called"] = len(state.artifacts)
         self._trace(
@@ -450,6 +472,8 @@ class Orchestrator:
             "pending_tool_calls": [],
             "react_last_planned_tools": planned_now,
             "tool_results_count": count,
+            "turn_sources": turn_sources,
+            "turn_tool_errors": tool_errors,
         }
 
     # Legacy standalone node (main graph now inlines tool execution in _rag_plan; logic moved above).
@@ -647,6 +671,9 @@ class Orchestrator:
                 "stage": state.slots.stage,
                 "stage_confidence": state.slots.stage_confidence,
                 "need_stage": state.slots.need_stage,
+                "intent_label": gstate.get("intent_label"),
+                "intent_query_type": gstate.get("intent_query_type"),
+                "intent_confidence": gstate.get("intent_confidence", 0.0),
                 "workflow": state.slots.extracted_features.get("workflow", "navigator"),
                 "workflow_structured_output": state.slots.extracted_features.get("workflow_structured_output", {}),
                 "guardrail_warnings": state.slots.extracted_features.get("guardrail_warnings", []),
@@ -662,9 +689,11 @@ class Orchestrator:
         workflow_override: Optional[str] = None,
         uploaded_context_text: Optional[str] = None,
         stream_handler: Optional[Any] = None,
+        username: str = "anonymous",
     ) -> tuple[str, dict]:
         """Run the graph. If stream_handler is given, it receives the final
         response text incrementally (callable taking a str chunk)."""
+        started = time.perf_counter()
         result = self._graph.invoke(
             {
                 "session_id": session_id,
@@ -674,4 +703,25 @@ class Orchestrator:
                 "stream_handler": stream_handler,
             }
         )
-        return result.get("reply", "I understand your question. Let me help you with that."), result.get("debug_info", {})
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        reply = result.get("reply", "I understand your question. Let me help you with that.")
+        debug_info = result.get("debug_info", {})
+
+        # Implicit feedback observation. Recorded here rather than in _finalize
+        # because this is the only place with the caller's identity, the wall
+        # clock, and the user's message before _load_state appends uploaded
+        # context to it. Returns immediately; all work happens off-thread.
+        feedback.observe_turn(
+            session_id=session_id,
+            username=username,
+            user_message=user_message,
+            reply=reply,
+            debug_info=debug_info,
+            sources=result.get("turn_sources") or [],
+            tool_errors=int(result.get("turn_tool_errors") or 0),
+            latency_ms=latency_ms,
+        )
+
+        debug_info["latency_ms"] = latency_ms
+        return reply, debug_info

@@ -411,6 +411,147 @@ def render_thinking_trace(debug_info: dict):
     )
 
 
+def render_analytics_page():
+    """Admin view over the implicit feedback system (app/feedback/).
+
+    Reads the feedback tables directly rather than calling /analytics/*, for
+    the same reason the chat page calls the orchestrator in-process: this
+    frontend is often deployed without a separate backend.
+    """
+    from app.feedback import adaptation as fb_adaptation
+    from app.feedback import judge as fb_judge
+    from app.feedback import rankings as fb_rankings
+
+    st.title("📊 Feedback & Usage Analytics")
+    st.caption(
+        "Quality here is **inferred**, never asked for. It fuses what users did next "
+        "(re-asked, corrected, thanked, built on the answer) with an LLM judge grading "
+        "each answer against the passages it actually retrieved. Scale is −1 to +1."
+    )
+
+    overview = fb_rankings.overview()
+    if not overview["total_turns"]:
+        st.info("No turns observed yet. Have a conversation, then come back.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Turns observed", overview["total_turns"])
+    c2.metric("Mean quality", f"{overview['mean_quality']:+.3f}")
+    c3.metric("Good / bad turns", f"{overview['good_turns']} / {overview['bad_turns']}")
+    c4.metric("Mean latency", f"{overview['mean_latency_ms']} ms")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sessions", overview["total_sessions"])
+    c2.metric("Users", overview["total_users"])
+    c3.metric("Judge coverage", f"{overview['judge_coverage']:.0%}")
+    c4.metric("Behavioural coverage", f"{overview['behavioural_coverage']:.0%}")
+
+    if overview["scored_turns"] < overview["total_turns"]:
+        st.caption(
+            f"{overview['scored_turns']} of {overview['total_turns']} turns carry enough "
+            "evidence to be scored. The rest are the newest turns and session-final "
+            "turns, which have no follow-up to learn from yet."
+        )
+
+    tabs = st.tabs(
+        ["Responses", "Features", "Users", "Documents", "Inferred needs", "Knowledge gaps"]
+    )
+
+    with tabs[0]:
+        st.subheader("Ranking of API responses")
+        order = st.radio(
+            "Order", ["worst", "best"], horizontal=True, label_visibility="collapsed"
+        )
+        rows = fb_rankings.response_ranking(top_n=25, order=order)
+        if not rows:
+            st.info("No turns have enough evidence to rank yet.")
+        for row in rows:
+            header = (
+                f"{row['quality']:+.2f} · {row['question'][:70] or '(empty)'}"
+            )
+            with st.expander(header):
+                st.markdown(f"**Question:** {row['question']}")
+                st.markdown(f"**Answer (preview):** {row['reply_preview']}")
+                if row.get("inferred_user_need"):
+                    st.markdown(f"**What they actually wanted:** {row['inferred_user_need']}")
+                if row.get("rationale"):
+                    st.markdown(f"**Judge rationale:** {row['rationale']}")
+                meta = st.columns(4)
+                meta[0].metric("Quality", f"{row['quality']:+.2f}")
+                meta[1].metric(
+                    "Behavioural",
+                    "—" if row["behavioral_score"] is None else f"{row['behavioral_score']:+.2f}",
+                )
+                meta[2].metric(
+                    "Judge",
+                    "—" if row["judge_overall"] is None else f"{row['judge_overall']:.2f}",
+                )
+                meta[3].metric("Latency", f"{row['latency_ms']} ms")
+                flags = []
+                if row["rephrased"]:
+                    flags.append("user re-asked")
+                if row["corrected"]:
+                    flags.append("user corrected the system")
+                if flags:
+                    st.warning(" · ".join(flags))
+                if row["sources"]:
+                    st.caption("Retrieved from: " + ", ".join(str(s) for s in row["sources"]))
+
+    with tabs[1]:
+        st.subheader("Ranking of use")
+        features = fb_rankings.feature_ranking()
+        for label, key in [
+            ("Workflows", "workflows"),
+            ("Intents", "intents"),
+            ("Query types", "query_types"),
+            ("Stages classified", "stages"),
+        ]:
+            st.markdown(f"**{label}**")
+            st.dataframe(features[key], use_container_width=True, hide_index=True)
+
+    with tabs[2]:
+        st.subheader("Ranking of user usage")
+        st.dataframe(fb_rankings.user_ranking(), use_container_width=True, hide_index=True)
+
+    with tabs[3]:
+        st.subheader("Document standing (the closed loop)")
+        st.caption(
+            "`weight` multiplies each document's retrieval ranking score. It stays at "
+            "1.00 until a document has enough scored turns, and is clamped so learned "
+            "preference breaks near-ties without overriding a strong semantic match."
+        )
+        sources = fb_rankings.source_ranking()
+        if sources:
+            st.dataframe(sources, use_container_width=True, hide_index=True)
+        else:
+            st.info("No document weights learned yet.")
+        if st.button("🔄 Recompute weights and gaps now"):
+            st.json(fb_adaptation.recompute_all())
+        if st.button("⚖️ Judge any ungraded turns"):
+            st.success(f"Graded {fb_judge.judge.judge_pending(limit=50)} turn(s).")
+
+    with tabs[4]:
+        st.subheader("What the system thinks users want")
+        st.caption(
+            "Reconstructed by the judge from each exchange — nobody was asked. "
+            "Low mean quality here means a need the system recognises but serves badly."
+        )
+        needs = fb_rankings.inferred_user_needs()
+        if needs:
+            st.dataframe(needs, use_container_width=True, hide_index=True)
+        else:
+            st.info("No inferred needs recorded yet (the judge may be disabled).")
+
+    with tabs[5]:
+        st.subheader("Knowledge gaps")
+        st.caption("Recurring questions answered badly — the ingestion to-do list.")
+        gaps = fb_rankings.knowledge_gaps()
+        if gaps:
+            st.dataframe(gaps, use_container_width=True, hide_index=True)
+        else:
+            st.success("No recurring failure topics detected.")
+
+
 def render_about_page():
     """Static About page (content from 'About the NIH Stage Model Chatbot')."""
     st.title("ℹ️ About the NIH Stage Model Chatbot")
@@ -557,11 +698,25 @@ with st.sidebar:
                     (st.success if ok else st.error)(msg)
     st.markdown("---")
 
+    # Analytics expose per-user activity, so the tab only appears for admins
+    # (ANALYTICS_ADMIN_USERS, or any user when AUTH_DISABLED).
+    from app.feedback import is_admin as _is_admin
+
+    _pages = ["chat", "about"]
+    if _is_admin(_history_username()):
+        _pages.append("analytics")
+    if st.session_state.current_page not in _pages:
+        st.session_state.current_page = "chat"
+
     nav_choice = st.radio(
         "Page",
-        options=["chat", "about"],
-        index=0 if st.session_state.current_page == "chat" else 1,
-        format_func=lambda p: {"chat": "💬 Chat", "about": "ℹ️ About"}[p],
+        options=_pages,
+        index=_pages.index(st.session_state.current_page),
+        format_func=lambda p: {
+            "chat": "💬 Chat",
+            "about": "ℹ️ About",
+            "analytics": "📊 Analytics",
+        }[p],
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -650,6 +805,10 @@ if st.session_state.current_page == "about":
     render_about_page()
     st.stop()
 
+if st.session_state.current_page == "analytics":
+    render_analytics_page()
+    st.stop()
+
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
 render_workflow_cards()
@@ -724,6 +883,9 @@ if user_input:
                     _record_exchange(user_input, reply)
                 else:
                     orchestrator = get_orchestrator()
+                    # Read on the main thread: the worker below has no access
+                    # to st.session_state.
+                    _username = _history_username()
 
                     # Stream the response: the orchestrator runs in a worker
                     # thread and pushes responder tokens into a queue that
@@ -743,6 +905,7 @@ if user_input:
                                 workflow_override=payload.get("workflow"),
                                 uploaded_context_text=payload.get("document_text"),
                                 stream_handler=token_queue.put,
+                                username=_username,
                             )
                         except Exception as worker_exc:
                             result_holder["error"] = worker_exc

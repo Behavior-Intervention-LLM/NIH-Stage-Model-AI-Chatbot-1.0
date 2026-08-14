@@ -11,6 +11,10 @@ from app.logging_config import logger
 from app.core.types import ChatRequest, ChatResponse
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
+from app import feedback
+from app.feedback import adaptation as feedback_adaptation
+from app.feedback import judge as feedback_judge
+from app.feedback import rankings as feedback_rankings
 from app.tools import tool_registry
 import auth as user_auth
 import chat_history
@@ -137,6 +141,7 @@ async def chat(request: ChatRequest, username: str = Depends(require_auth)):
             user_message=request.message,
             workflow_override=request.workflow,
             uploaded_context_text=request.document_text,
+            username=username,
         )
 
         reply = Guardrails.sanitize_response(reply)
@@ -184,6 +189,80 @@ async def delete_conversation(
     if not chat_history.delete_conversation(username, conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"status": "deleted"}
+
+
+def require_admin(username: str = Depends(require_auth)) -> str:
+    """Gate the analytics surface: it exposes per-user activity.
+
+    Allow-list lives in ANALYTICS_ADMIN_USERS. See app.feedback.is_admin.
+    """
+    if not feedback.is_admin(username):
+        raise HTTPException(
+            status_code=403,
+            detail="Analytics access requires membership in ANALYTICS_ADMIN_USERS.",
+        )
+    return username
+
+
+@app.get("/analytics/overview")
+async def analytics_overview(_: str = Depends(require_admin)):
+    """Headline quality numbers and how much of the traffic is actually scored."""
+    return feedback_rankings.overview()
+
+
+@app.get("/analytics/rankings/features")
+async def analytics_features(_: str = Depends(require_admin)):
+    """Ranking of use: workflows, intents, query types, stages."""
+    return feedback_rankings.feature_ranking()
+
+
+@app.get("/analytics/rankings/users")
+async def analytics_users(_: str = Depends(require_admin)):
+    """Ranking of user usage: volume, breadth, and how well each user is served."""
+    return {"users": feedback_rankings.user_ranking()}
+
+
+@app.get("/analytics/rankings/responses")
+async def analytics_responses(
+    order: str = "worst", top_n: int = 20, _: str = Depends(require_admin)
+):
+    """Ranking of individual responses. order=worst is the fix-it queue."""
+    if order not in {"worst", "best"}:
+        raise HTTPException(status_code=400, detail="order must be 'worst' or 'best'")
+    return {
+        "order": order,
+        "responses": feedback_rankings.response_ranking(top_n=max(1, min(top_n, 200)), order=order),
+    }
+
+
+@app.get("/analytics/rankings/sources")
+async def analytics_sources(_: str = Depends(require_admin)):
+    """Ranking of documents by learned contribution, with the weight in force."""
+    return {"sources": feedback_rankings.source_ranking()}
+
+
+@app.get("/analytics/needs")
+async def analytics_needs(_: str = Depends(require_admin)):
+    """What the system has inferred users are actually trying to accomplish."""
+    return {"needs": feedback_rankings.inferred_user_needs()}
+
+
+@app.get("/analytics/gaps")
+async def analytics_gaps(_: str = Depends(require_admin)):
+    """Topics the corpus keeps answering badly — the ingestion to-do list."""
+    return {"gaps": feedback_rankings.knowledge_gaps()}
+
+
+@app.post("/analytics/recompute")
+async def analytics_recompute(_: str = Depends(require_admin)):
+    """Force a full relearn of source weights and knowledge gaps."""
+    return feedback_adaptation.recompute_all()
+
+
+@app.post("/analytics/judge-pending")
+async def analytics_judge_pending(limit: int = 25, _: str = Depends(require_admin)):
+    """Grade turns that have no judgement yet (e.g. after enabling the judge)."""
+    return {"judged": feedback_judge.judge.judge_pending(limit=max(1, min(limit, 200)))}
 
 
 @app.get("/sessions/{session_id}")
