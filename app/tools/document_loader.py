@@ -67,7 +67,12 @@ class DocumentLoader:
                 for page_num, page in enumerate(pdf.pages, 1):
                     text = page.extract_text()
                     if text:
-                        full_text += f"\n\n---  {page_num}  ---\n\n{text}"
+                        # Page markers used to be interleaved here. They were
+                        # indexed as ordinary content, putting the marker's
+                        # own words into the vocabulary and splitting
+                        # sentences that run across a page break. Nothing
+                        # reads page numbers, so they are simply omitted.
+                        full_text += f"\n\n{text}"
                 
                 if full_text:
                     chunks = self._split_text(full_text, source_name)
@@ -80,7 +85,12 @@ class DocumentLoader:
                 for page_num, page in enumerate(pdf_reader.pages, 1):
                     text = page.extract_text()
                     if text:
-                        full_text += f"\n\n---  {page_num}  ---\n\n{text}"
+                        # Page markers used to be interleaved here. They were
+                        # indexed as ordinary content, putting the marker's
+                        # own words into the vocabulary and splitting
+                        # sentences that run across a page break. Nothing
+                        # reads page numbers, so they are simply omitted.
+                        full_text += f"\n\n{text}"
                 
                 if full_text:
                     chunks = self._split_text(full_text, source_name)
@@ -155,11 +165,20 @@ class DocumentLoader:
         
         while start < len(text):
             end = start + self.chunk_size
-            
-            # 
+
+            # Back off to the nearest sentence boundary so chunks do not begin
+            # or end mid-word. The boundary set was CJK-only ('。！？') plus
+            # newline, which never matches English prose — so every chunk of
+            # these documents was cut at a hard character offset, producing
+            # passages that start mid-sentence ("s. This can help to maximize
+            # fidelity...") and read as garbled to both the ranker and the LLM.
             if end < len(text):
-                # 、、
-                for i in range(end, max(start + self.chunk_size - 100, start), -1):
+                floor = max(start + self.chunk_size - 150, start + 1)
+                for i in range(min(end, len(text) - 1), floor, -1):
+                    # English sentence end: '.', '!' or '?' followed by space.
+                    if text[i] in '.!?' and (i + 1 >= len(text) or text[i + 1] in ' \n\t'):
+                        end = i + 1
+                        break
                     if text[i] in '。！？\n':
                         end = i + 1
                         break
