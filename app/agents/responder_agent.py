@@ -2,12 +2,20 @@
 Responder Agent: execute plan and generate final user-facing response.
 """
 import json
-import re
 from pathlib import Path
 from typing import Any, List
 
 from app.agents.base import BaseAgent
+from app.config import settings
 from app.core.llm import llm_client
+from app.core.stage_model import (
+    STAGE_MODEL,
+    STAGES,
+    SUBSTAGES,
+    find_stage_in_text,
+    is_definition_query,
+    stage_summary_lines,
+)
 from app.core.types import AgentOutput, SessionState
 
 
@@ -22,9 +30,14 @@ class ResponderAgent(BaseAgent):
         #     "and note that the snippet is incomplete."
         # ),
 
+        # NB: the trailing comma after the first string used to make this a
+        # tuple rather than one concatenated prompt. It is normally masked by
+        # app/prompts/responder.md overriding the section, and only surfaced
+        # if that file went missing — at which point a tuple reached the LLM
+        # client as the system prompt.
         "system_general": (
-            "You are a chatbot designed for users to help with any and all information pertaining to Behavioral Science Intervention Methodologies. Your responses should align well and closely with the philosophies and pillars of foundation of the National Institute of Health",
-            "Use relevant facts in the CONTEXT block below (stage, confidence, workflow outputs, RAG snippets when answering"
+            "You are a chatbot designed for users to help with any and all information pertaining to Behavioral Science Intervention Methodologies. Your responses should align well and closely with the philosophies and pillars of foundation of the National Institute of Health.\n"
+            "Use relevant facts in the CONTEXT block below (stage, confidence, workflow outputs, RAG snippets) when answering.\n"
             "If there is any missing info, do not dump raw field names or imitate an internal execution trace.\n"
             "If stage confidence is low or stage is unknown, say so plainly and ask focused follow-ups.\n"
             "If retrieval evidence exists, ground claims briefly (sources or quotes as appropriate).\n"
@@ -36,14 +49,13 @@ class ResponderAgent(BaseAgent):
         ),
     }
 
+    # Keyed by canonical Roman identifier, sub-stages included, so "what is
+    # Stage IB" resolves. This dict used to be keyed "0".."5" while every
+    # lookup passed a Roman numeral, so only Stage 0 ever matched and the one
+    # accurate stage taxonomy in the codebase was unreachable for Stages I-V.
     STAGE_INFO = {
-            "0": "Stage 0 involves basic science that occurs prior to intervention development, but is relevant (ultimately translatable) to intervention development. Research on mechanisms of change is an integral part of all other stages of intervention development, involving basic science questions about behavior change within the context of intervention development studies.",
-            "1": "Stage I encompasses all activities related to the creation and preliminary testing of a new behavioral intervention, including generation of new interventions as well as modification, adaptation, or refinement of existing interventions (Stage IA), culminating in feasibility and pilot testing (Stage IB). Stage I can also include modification of an intervention for implementability, development of training materials, and may be conducted in research or community settings.",
-            "2": "Stage II (Pure Efficacy) consists of experimental testing of promising behavioral interventions in research settings, with research-based providers.",
-            "3": "Stage III (Real World Efficacy) consists of experimental testing of promising behavioral interventions in community settings, with community-based providers or caregivers, while maintaining a high level of control necessary to establish internal validity. This is sometimes referred to as a hybrid efficacy-effectiveness stage.",
-            "4": "Stage IV (Effectiveness) examines empirically supported behavioral interventions in community settings, with community-based providers or caregivers, while maximizing external validity.",
-            "5": "Stage V (Implementation and Dissemination) examines strategies of implementation and adoption of empirically supported interventions in community settings.",
-        }
+        key: STAGE_MODEL[key].description for key in (*STAGES, *SUBSTAGES)
+    }
 
     def __init__(self):
         super().__init__("ResponderAgent")
@@ -115,6 +127,37 @@ class ResponderAgent(BaseAgent):
             return raw[:max_chars] + "\n… [truncated]"
         return raw
 
+    @staticmethod
+    def _grounding_instruction(rag_active: bool, has_attachments: bool) -> str:
+        """Tell the responder what it is allowed to claim as grounding.
+
+        A file the user attached is legitimate grounding. Without this branch,
+        "summarise my protocol" hits a corpus miss and the responder is told
+        the corpus does not cover the topic — while the protocol sits in the
+        prompt directly above.
+        """
+        if rag_active and has_attachments:
+            return (
+                "Ground claims in the attached document(s) below and in the retrieval "
+                "evidence. Say which of the two each claim comes from — the user's own "
+                "document and the NIH reference corpus are different kinds of source."
+            )
+        if has_attachments:
+            return (
+                "No corpus passage matched, but the user attached document(s), shown "
+                "below. Answer from them and say you are working from what they "
+                "attached. Do not claim support from the NIH reference corpus. If the "
+                "attachment is marked truncated, say which part you saw."
+            )
+        if rag_active:
+            return "Ground claims in the evidence snippets below and name the sources you use."
+        return (
+            "Retrieval found no relevant passage in the document corpus, and nothing "
+            "is attached. Answer from general knowledge and say plainly that the "
+            "corpus does not cover this; do not imply the answer is document-grounded "
+            "and do not cite sources."
+        )
+
     def _build_general_context(
         self,
         state: SessionState,
@@ -127,6 +170,7 @@ class ResponderAgent(BaseAgent):
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         xf = state.slots.extracted_features
         assessment = xf.get("evidence_assessment") or {}
+        attachment_block = state.attachment_context(settings.ATTACHMENT_MAX_CHARS)
         workflow = xf.get("workflow", "navigator")
         workflow_summary = xf.get("workflow_summary") or ""
         workflow_structured = xf.get("workflow_structured_output") or {}
@@ -135,6 +179,17 @@ class ResponderAgent(BaseAgent):
         lines = [
             f"User question: {user_message}",
             "",
+        ]
+        # Placed before the state dump: when the user attaches something, it is
+        # usually the subject of the question, and it must not compete with
+        # bookkeeping fields for the prompt's attention or its length budget.
+        if attachment_block:
+            lines += [
+                "--- DOCUMENTS THE USER ATTACHED TO THIS CONVERSATION ---",
+                attachment_block,
+                "",
+            ]
+        lines += [
             "--- CONTEXT (for synthesis; do not quote section headers to the user) ---",
             f"Inferred stage: {state.slots.stage!r} | stage_confidence: {state.slots.stage_confidence!r}",
             f"Workflow mode: {workflow}",
@@ -156,14 +211,7 @@ class ResponderAgent(BaseAgent):
             f"(attempts={assessment.get('attempts')}, "
             f"usable_passages={assessment.get('usable_count', 0)}, "
             f"best_similarity={assessment.get('best_score')})",
-            (
-                "Retrieval found no relevant passage in the document corpus. Answer "
-                "from general knowledge and say plainly that the corpus does not "
-                "cover this; do not imply the answer is document-grounded and do "
-                "not cite sources."
-                if not rag_active
-                else "Ground claims in the evidence snippets below and name the sources you use."
-            ),
+            self._grounding_instruction(rag_active, bool(attachment_block)),
             f"Knowledge sources: {evidence_sources}",
             f"Evidence snippets: {evidence_lines}",
             f"Guardrail warnings: {guardrail_warnings}",
@@ -199,14 +247,12 @@ class ResponderAgent(BaseAgent):
         """Build (system_prompt, user_prompt, citations) for the final response."""
         evidence_lines, evidence_sources, citations = self._collect_evidence(state)
 
-        message_lower = user_message.lower().strip()
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_query_type = str(intent_payload.get("query_type", "")).lower()
 
         is_stage_definition_query = (
-            any(k in message_lower for k in ["what is", "what's", "define", "how many stages", "number of stages", "list stages"])
-            and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model"])
-        ) or intent_query_type == "definition"
+            is_definition_query(user_message) or intent_query_type == "definition"
+        )
 
         sections = self._get_responder_sections()
         system_prompt = sections["system_general"]
@@ -347,19 +393,16 @@ class ResponderAgent(BaseAgent):
             )
 
         asks_definition = (
-            "nih stage model" in message_lower
-            and any(k in message_lower for k in ["what is", "what's", "define", "how many stages", "number of stages", "list stages", "explain"])
-        ) or intent_query_type == "definition"
+            is_definition_query(user_message) or intent_query_type == "definition"
+        )
 
         if asks_definition:
             response_parts.append(
-                "The NIH Stage Model has 6 stages: Stage 0, Stage I, Stage II, Stage III, Stage IV, and Stage V."
+                f"The NIH Stage Model has {len(STAGES)} stages: "
+                + ", ".join(f"Stage {k}" for k in STAGES)
+                + "."
             )
-            response_parts.append(
-                "Stage 0 (basic mechanisms), Stage I (feasibility/manualization), "
-                "Stage II (efficacy + mechanism validation), Stage III (effectiveness in real-world settings), "
-                "Stage IV (implementation/dissemination), and Stage V (sustainability)."
-            )
+            response_parts.extend(stage_summary_lines())
             if rag_active and evidence_sources:
                 response_parts.append(
                     f"Based on version-aware knowledge sources: {', '.join(evidence_sources[:3])}."
@@ -374,14 +417,13 @@ class ResponderAgent(BaseAgent):
                 metadata={"citations": [c.model_dump() for c in citations]},
             )
 
-        stage_match = re.search(r"stage\s*(0|i{1,3}|iv|v)\b", message_lower, flags=re.IGNORECASE)
-        if stage_match:
-            stage_token = stage_match.group(1).upper()
-            if stage_token in self.STAGE_INFO:
-                if any(k in message_lower for k in ["requirement", "requirements", "criteria"]):
-                    response_parts.append(self.STAGE_INFO[stage_token])
-                elif not response_parts:
-                    response_parts.append(self.STAGE_INFO[stage_token])
+        stage_token = find_stage_in_text(user_message)
+        if stage_token and stage_token in self.STAGE_INFO:
+            asks_requirements = any(
+                k in message_lower for k in ["requirement", "requirements", "criteria"]
+            )
+            if asks_requirements or not response_parts:
+                response_parts.append(self.STAGE_INFO[stage_token])
 
         if state.slots.stage:
             response_parts.append(f"Based on current information, your project is most likely at **Stage {state.slots.stage}**.")

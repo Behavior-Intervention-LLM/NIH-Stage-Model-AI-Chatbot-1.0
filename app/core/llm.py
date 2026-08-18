@@ -11,7 +11,7 @@ from openai import OpenAI
 from app.config import settings
 
 
-class LLMClient:
+class LLMClient:    
     """Single client for all supported LLM providers. Handles JSON parsing."""
 
     def __init__(self):

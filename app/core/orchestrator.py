@@ -30,7 +30,8 @@ class ChatGraphState(TypedDict, total=False):
     session_id: str
     user_message: str
     workflow_override: Optional[str]
-    uploaded_context_text: Optional[str]
+    # Files attached to this turn: [{"name": ..., "text": ...}]
+    attachments: List[Dict[str, str]]
     # Optional callable(str) that receives responder text incrementally.
     stream_handler: Optional[Any]
     state: SessionState
@@ -180,7 +181,7 @@ class Orchestrator:
     def _load_state(self, gstate: ChatGraphState) -> ChatGraphState:
         session_id = gstate["session_id"]
         user_message = gstate["user_message"]
-        uploaded_context_text = (gstate.get("uploaded_context_text") or "").strip()
+        incoming_attachments = gstate.get("attachments") or []
 
         state = state_store.get_state(session_id)
         if not state:
@@ -193,33 +194,31 @@ class Orchestrator:
         # continuity lives in messages/summary, which is where it belongs.
         state.artifacts.clear()
 
-        # Persist uploaded context in session memory so subsequent turns can reuse it.
-        existing_uploaded = str(state.slots.extracted_features.get("session_uploaded_context", "") or "")
-        if uploaded_context_text:
-            if uploaded_context_text not in existing_uploaded:
-                if existing_uploaded:
-                    existing_uploaded = f"{existing_uploaded}\n\n{uploaded_context_text}"
-                else:
-                    existing_uploaded = uploaded_context_text
-            # Keep bounded session attachment context.
-            existing_uploaded = existing_uploaded[:15000]
-            state.slots.extracted_features["session_uploaded_context"] = existing_uploaded
-            state.slots.extracted_features["session_uploaded_context_chars"] = len(existing_uploaded)
+        # Attachments persist for the session so follow-up questions can refer
+        # back to them. They are held on the state object, NOT appended to the
+        # user message: prepending meant the document was re-sent to the intent
+        # and stage classifiers on every later turn, and appeared twice in the
+        # responder prompt.
+        added_now = 0
+        for item in incoming_attachments:
+            if state.add_attachment(
+                str(item.get("name") or "attached document"), str(item.get("text") or "")
+            ):
+                added_now += 1
 
-        reusable_uploaded = str(state.slots.extracted_features.get("session_uploaded_context", "") or "")
-        effective_user_message = user_message
-        if reusable_uploaded:
-            effective_user_message = (
-                f"{user_message}\n\n"
-                "[Session uploaded context]\n"
-                f"{reusable_uploaded[:4500]}"
-            )
+        # Agents that route rather than answer get told an attachment exists,
+        # not what is in it — enough for "summarise this" to classify
+        # correctly, without the document riding along on every call.
+        context = memory_manager.get_context_for_agent(state)
+        if state.attachments:
+            listing = ", ".join(f"{a.name} ({a.chars} chars)" for a in state.attachments)
+            context = f"{context}\n\nAttached to this conversation: {listing}"
 
         return {
             **gstate,
             "state": state,
-            "user_message": effective_user_message,
-            "context": memory_manager.get_context_for_agent(state),
+            "user_message": user_message,
+            "context": context,
             "pending_tool_calls": [],
             "called_agents": [],
             "react_last_planned_tools": 0,
@@ -233,9 +232,10 @@ class Orchestrator:
             "debug_info": {
                 "execution_trace": [],
                 "orchestration_engine": "langgraph",
-                "session_uploaded_context_bound": bool(reusable_uploaded),
-                "session_uploaded_context_chars": len(reusable_uploaded),
-                "uploaded_context_added_this_turn": bool(uploaded_context_text),
+                "attachments": [
+                    {"name": a.name, "chars": a.chars} for a in state.attachments
+                ],
+                "attachments_added_this_turn": added_now,
             },
         }
 
@@ -547,6 +547,7 @@ class Orchestrator:
         assessment = RAGAgent.assess_evidence(citations)
         assessment["attempts"] = attempts_done
         assessment["queries_tried"] = list(gstate.get("rag_queries_tried", []))
+        assessment["has_attachments"] = bool(state.attachments)
 
         # Nothing was planned (intent skips retrieval, or reformulation had
         # nothing new to try), so there is no failure here to retry.
@@ -555,6 +556,11 @@ class Orchestrator:
             retrieval_ran
             and not assessment["sufficient"]
             and attempts_done < max_attempts
+            # A question about an attached document ("summarise my protocol")
+            # will legitimately miss the corpus. Reformulating the query cannot
+            # fix that, and the answer already has grounding to work from, so
+            # spending another LLM rewrite plus retrieval on it is pure waste.
+            and not state.attachments
         )
         assessment["retrying"] = retry
         if not retrieval_ran and not citations:
@@ -711,18 +717,33 @@ class Orchestrator:
         user_message: str,
         workflow_override: Optional[str] = None,
         uploaded_context_text: Optional[str] = None,
+        uploaded_context_name: Optional[str] = None,
+        attachments: Optional[List[Dict[str, str]]] = None,
         stream_handler: Optional[Any] = None,
         username: str = "anonymous",
     ) -> tuple[str, dict]:
         """Run the graph. If stream_handler is given, it receives the final
         response text incrementally (callable taking a str chunk)."""
         started = time.perf_counter()
+
+        # Two ways in: a list of named files (the chat UI), or a single blob of
+        # pre-extracted text (ChatRequest.document_text, for API callers who
+        # did their own extraction). Normalise to one list.
+        incoming = [dict(a) for a in (attachments or []) if (a.get("text") or "").strip()]
+        if uploaded_context_text and uploaded_context_text.strip():
+            incoming.append(
+                {
+                    "name": uploaded_context_name or "attached document",
+                    "text": uploaded_context_text,
+                }
+            )
+
         result = self._graph.invoke(
             {
                 "session_id": session_id,
                 "user_message": user_message,
                 "workflow_override": workflow_override,
-                "uploaded_context_text": uploaded_context_text,
+                "attachments": incoming,
                 "stream_handler": stream_handler,
             }
         )

@@ -7,7 +7,7 @@ import uuid
 
 
 class StateStore:
-    """（）"""
+    """（Storing dictionary formamt interaction between user and chat）"""
     
     def __init__(self):
         self._sessions: Dict[str, SessionState] = {}

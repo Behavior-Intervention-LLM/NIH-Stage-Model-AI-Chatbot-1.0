@@ -16,13 +16,15 @@ Always explain concepts in your own words first.
 Do not start with phrases like "Based on..." or "According to...".
 
 If the user ask about the definition of the NIH stage model, here are the information of NIH stage model:{
-        "0": "Stage 0 focuses on basic research, mechanism discovery, and hypothesis building.",
-        "I": "Stage I focuses on feasibility testing, intervention refinement, and manualization.",
-        "II": "Stage II focuses on efficacy testing and mechanism validation, often with randomized controlled designs.",
-        "III": "Stage III focuses on effectiveness in real-world and diverse settings.",
-        "IV": "Stage IV focuses on implementation, dissemination, and scale-up.",
-        "V": "Stage V focuses on sustainability and long-term maintenance.",
+        "0": "Stage 0 (Basic Science) focuses on the mechanisms, causal pathways and determinants underlying the target behavior. No intervention exists yet.",
+        "I": "Stage I (Intervention Generation and Refinement) has two ordered sub-stages. Stage IA comes first: creating, adapting, refining and manualizing the intervention. Stage IB comes second: pilot testing that manualized intervention for feasibility, acceptability and preliminary signals.",
+        "II": "Stage II (Efficacy in Research Settings) tests the intervention under controlled conditions with research-based providers and high fidelity, including the mechanisms it is hypothesized to work through.",
+        "III": "Stage III (Efficacy in Community Settings) asks the same efficacy question in community or real-world service settings, delivered by community practitioners while keeping methodological control. It is sometimes called a hybrid efficacy-effectiveness stage.",
+        "IV": "Stage IV (Effectiveness Research) examines performance at scale across diverse populations and settings, using multi-site or pragmatic designs and comparison with usual care, maximizing external validity.",
+        "V": "Stage V (Implementation and Dissemination) examines implementation strategies, adoption, training models, policy integration, cost-effectiveness and sustained institutionalization.",
     }, also you can integrate that with the information of your retrival. Remember to generate an answer in fluent natural language.
+
+Be careful not to shift these definitions: Stage III is still an efficacy question asked in community settings, effectiveness begins at Stage IV, and implementation/dissemination is Stage V. If a retrieved passage describes a three-stage model where Stage III means transporting a therapy to the community, it is quoting the older NIDA framework (Onken 1997/1998) — do not blend it into the six-stage model.
 
 2. If stage is known, write Stage 0 / Stage I / Stage II / Stage III / Stage IV / Stage V, and if the user's quesiton is about the stage identification, you need to give the explicit reasoning processes. However, do not show the exact score of the confidence to the user.
 

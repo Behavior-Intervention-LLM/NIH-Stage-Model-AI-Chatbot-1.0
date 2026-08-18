@@ -20,6 +20,7 @@ except Exception:
 # Enables tool to utilize agents
 from app.core.orchestrator import Orchestrator
 from app.core.guardrails import Guardrails
+from app.core.state_store import state_store
 from app.tools import tool_registry
 import chat_history
 
@@ -217,101 +218,151 @@ def human_title(title: str) -> str:
     return title if title and title.strip() else "Untitled Chat"
 
 
+MAX_PDF_PAGES = 60
+
+
 # Extracting PDF
-def _extract_text_from_pdf(file_bytes: bytes) -> str:
-    py_pdf2 = importlib.util.find_spec("PyPDF2") # type: ignore
+def _extract_text_from_pdf(file_bytes: bytes) -> tuple[str, str]:
+    """Return (text, status). Status is shown to the user, so it must explain
+    a failure rather than leaving them to assume the file was read."""
+    py_pdf2 = importlib.util.find_spec("PyPDF2")  # type: ignore
     if py_pdf2 is None:
-        return ""
+        return "", "PDF support is not installed (PyPDF2 missing)."
     PyPDF2 = importlib.import_module("PyPDF2")
     try:
         reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        pages = []
-        for i, page in enumerate(reader.pages[:30], 1):
+    except Exception as exc:
+        return "", f"Could not open the PDF ({type(exc).__name__}). It may be corrupt or password-protected."
+
+    total_pages = len(reader.pages)
+    pages = []
+    for i, page in enumerate(reader.pages[:MAX_PDF_PAGES], 1):
+        try:
             text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"[Page {i}]\n{text.strip()}")
-        return "\n\n".join(pages).strip()
-    except Exception:
-        return ""
+        except Exception:
+            text = ""
+        if text.strip():
+            pages.append(f"[Page {i}]\n{text.strip()}")
+
+    if not pages:
+        # An image-only scan extracts nothing. Saying so is the difference
+        # between the user re-attaching a text PDF and believing we read it.
+        return "", (
+            f"No text layer found in this PDF ({total_pages} pages). It is most likely a "
+            "scan or image export — OCR is not available here, so please attach a "
+            "text-based PDF or paste the text."
+        )
+
+    status = f"Read {len(pages)} of {total_pages} page(s)."
+    if total_pages > MAX_PDF_PAGES:
+        status += f" Only the first {MAX_PDF_PAGES} pages were read."
+    return "\n\n".join(pages).strip(), status
 
 
 # Extracting DOCX
-def _extract_text_from_docx(file_bytes: bytes) -> str:
+def _extract_text_from_docx(file_bytes: bytes) -> tuple[str, str]:
     docx_spec = importlib.util.find_spec("docx")
     if docx_spec is None:
-        return ""
+        return "", "DOCX support is not installed (python-docx missing)."
     Document = importlib.import_module("docx").Document
     try:
         doc = Document(io.BytesIO(file_bytes))
-        lines = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
-        return "\n".join(lines).strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        return "", f"Could not open the DOCX ({type(exc).__name__}). If this is an older .doc file, save it as .docx first."
+
+    lines = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+    # Tables carry study designs and measures matrices; dropping them loses
+    # exactly the content people attach these documents to discuss.
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
+            if cells:
+                lines.append(" | ".join(cells))
+
+    if not lines:
+        return "", "The DOCX contains no readable text (it may hold only images)."
+    return "\n".join(lines).strip(), f"Read {len(lines)} paragraph(s)."
 
 
 # Extracting TXT
-def _extract_text_from_txt(file_bytes: bytes) -> str:
-    for enc in ("utf-8", "utf-16", "latin-1"):
+def _extract_text_from_txt(file_bytes: bytes) -> tuple[str, str]:
+    """Decode text, actually honouring the encoding.
+
+    The previous loop passed errors="ignore", so the utf-8 attempt always
+    "succeeded" and the utf-16/latin-1 branches were unreachable — a utf-16
+    file decoded to text interleaved with NUL bytes.
+    """
+    if file_bytes.startswith((b"\xff\xfe", b"\xfe\xff")):
+        candidates = ("utf-16", "utf-8", "latin-1")
+    else:
+        candidates = ("utf-8-sig", "utf-16", "latin-1")
+
+    for enc in candidates:
         try:
-            return file_bytes.decode(enc, errors="ignore").strip()
-        except Exception:
+            text = file_bytes.decode(enc).strip()
+        except (UnicodeDecodeError, UnicodeError):
             continue
-    return ""
+        # latin-1 decodes any byte sequence, so a binary file "succeeds" as
+        # control-character soup. Reject that rather than feed it to the model.
+        printable = sum(1 for c in text if c.isprintable() or c.isspace())
+        if text and printable / len(text) > 0.9:
+            return text, f"Read {len(text)} characters ({enc})."
+
+    return "", "Could not decode this file as text."
 
 
-def _extract_text_from_image(file_bytes: bytes) -> tuple[str, str]:
-    """Try OCR; return (text, status_msg)."""
-    try:
-        from PIL import Image
-    except Exception:
-        return "", "Pillow not available, image OCR skipped."
-    pyt_spec = importlib.util.find_spec("pytesseract")
-    if pyt_spec is None:
-        return "", "pytesseract not installed, image OCR skipped."
-    pytesseract = importlib.import_module("pytesseract")
-    try:
-        image = Image.open(io.BytesIO(file_bytes))
-        text = pytesseract.image_to_string(image).strip()
-        if text:
-            return text, "Image OCR succeeded."
-        return "", "Image OCR completed but no text found."
-    except Exception:
-        return "", "Image OCR failed."
+# An image OCR branch used to live here. It was unreachable: the uploader
+# accepts only pdf/docx/txt, and pytesseract is not a dependency. Removed
+# rather than left as a branch that looks supported but never runs.
 
 
+MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 
-def parse_uploaded_files(uploaded_files) -> tuple[str, list[str]]:
+
+def parse_uploaded_files(uploaded_files) -> tuple[list[dict], list[str]]:
+    """Extract text from each attached file.
+
+    Returns (files, failures) where `files` is [{"name", "text"}] and
+    `failures` are user-facing messages for anything that could not be read.
+
+    No truncation happens here. Files are handed to the orchestrator whole and
+    the prompt budget (ATTACHMENT_MAX_CHARS) is applied once, at the point of
+    use — the old chain of per-file/merged/session/prompt caps discarded up to
+    two thirds of a multi-file upload without telling anyone.
+    """
     if not uploaded_files:
-        return "", []
-    parsed_parts = []
-    parse_logs = []
+        return [], []
+
+    files: list[dict] = []
+    failures: list[str] = []
+
     for up in uploaded_files:
         name = up.name
         lower = name.lower()
         file_bytes = up.getvalue()
-        text = ""
-        status = ""
+
+        if len(file_bytes) > MAX_ATTACHMENT_BYTES:
+            failures.append(
+                f"**{name}** is {len(file_bytes) / 1024 / 1024:.1f} MB, over the "
+                f"{MAX_ATTACHMENT_BYTES // 1024 // 1024} MB limit — it was not attached."
+            )
+            continue
 
         if lower.endswith(".pdf"):
-            text = _extract_text_from_pdf(file_bytes)
-            status = "PDF parsed" if text else "PDF parse failed or empty"
+            text, status = _extract_text_from_pdf(file_bytes)
         elif lower.endswith(".docx"):
-            text = _extract_text_from_docx(file_bytes)
-            status = "DOCX parsed" if text else "DOCX parse failed or empty"
+            text, status = _extract_text_from_docx(file_bytes)
         elif lower.endswith(".txt"):
-            text = _extract_text_from_txt(file_bytes)
-            status = "TXT parsed" if text else "TXT parse failed or empty"
-        elif lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
-            text, status = _extract_text_from_image(file_bytes)
+            text, status = _extract_text_from_txt(file_bytes)
         else:
-            status = "Unsupported file type (supported: pdf/docx/txt/images)"
+            text, status = "", "Unsupported file type (supported: pdf, docx, txt)."
 
         if text:
-            parsed_parts.append(f"[Source: {name}]\n{text[:3500]}")
-        parse_logs.append(f"{name}: {status}")
+            files.append({"name": name, "text": text, "status": status})
+        else:
+            failures.append(f"**{name}** could not be read. {status}")
 
-    merged = "\n\n".join(parsed_parts).strip()
-    return merged[:12000], parse_logs
+    return files, failures
 
 
 # What is happening here
@@ -986,8 +1037,74 @@ uploaded_files = st.file_uploader(
     "Attach Files Here",
     type=["pdf", "docx", "txt"],
     accept_multiple_files=True,
-    help="Parsed text will be appended as uploaded context for the next message.",
+    help=(
+        "Attached files are working context for this conversation only. They are "
+        "never added to the reference corpus and are discarded when the session ends."
+    ),
 )
+
+# Extraction is the expensive part of a turn and Streamlit hands back the same
+# file objects on every rerun, so results are cached per (name, size). Without
+# this a PDF is re-parsed on every message sent while it stays attached.
+if "_attachment_cache" not in st.session_state:
+    st.session_state._attachment_cache = {}
+
+
+def parse_uploaded_files_cached(files):
+    if not files:
+        return [], []
+    cache = st.session_state._attachment_cache
+    parsed, failures, to_parse = [], [], []
+    for up in files:
+        key = (up.name, up.size)
+        if key in cache:
+            hit = cache[key]
+            (parsed if hit["ok"] else failures).append(hit["value"])
+        else:
+            to_parse.append((key, up))
+
+    if to_parse:
+        fresh, fresh_failures = parse_uploaded_files([up for _, up in to_parse])
+        by_name = {f["name"]: f for f in fresh}
+        for key, up in to_parse:
+            if up.name in by_name:
+                cache[key] = {"ok": True, "value": by_name[up.name]}
+                parsed.append(by_name[up.name])
+        for msg in fresh_failures:
+            failures.append(msg)
+    return parsed, failures
+
+
+_attached_files, _attach_failures = parse_uploaded_files_cached(uploaded_files)
+
+# Failures are shown in the page, not folded into a collapsed expander: a user
+# whose scanned PDF yielded nothing needs to know before they ask about it.
+for _msg in _attach_failures:
+    st.warning(f"📎 {_msg}")
+
+# Files bound to the session on an earlier turn: the uploader forgets them
+# once the widget is cleared, but the conversation still has them in context.
+_bound_state = None
+_bound = []
+try:
+    _bound_state = state_store.get_state(st.session_state.session_id)
+    _bound = list(_bound_state.attachments) if _bound_state else []
+except Exception:
+    _bound_state, _bound = None, []
+
+if _attached_files or _bound:
+    names = {a.name for a in _bound} | {f["name"] for f in _attached_files}
+    cols = st.columns([6, 1])
+    cols[0].caption(
+        "📎 In context for this conversation: "
+        + ", ".join(sorted(names))
+        + " — not added to the reference corpus."
+    )
+    if cols[1].button("Clear", key="clear_attachments", help="Detach all files"):
+        if _bound_state:
+            _bound_state.clear_attachments()
+        st.session_state._attachment_cache = {}
+        st.rerun()
 
 user_input = st.chat_input("Enter your question...")
 
@@ -1008,16 +1125,16 @@ if user_input:
             workflow_value = st.session_state.selected_workflow
             payload = {"session_id": st.session_state.session_id, "message": user_input}
             payload["workflow"] = workflow_value
-            parsed_context_text, parse_logs = parse_uploaded_files(uploaded_files)
-            if parsed_context_text:
-                payload["document_text"] = parsed_context_text
-                with st.expander("📎 Parsed Upload Context", expanded=False):
-                    st.caption(f"Parsed chars: {len(parsed_context_text)}")
-                    st.text(parsed_context_text[:1200] + ("..." if len(parsed_context_text) > 1200 else ""))
-            if parse_logs:
-                with st.expander("🧾 Upload Parse Logs", expanded=False):
-                    for item in parse_logs:
-                        st.text(f"- {item}")
+            payload["attachments"] = [
+                {"name": f["name"], "text": f["text"]} for f in _attached_files
+            ]
+            if _attached_files:
+                with st.expander(
+                    f"📎 {len(_attached_files)} attached file(s) in context", expanded=False
+                ):
+                    for f in _attached_files:
+                        st.markdown(f"**{f['name']}** — {len(f['text'])} chars. {f['status']}")
+                        st.text(f["text"][:800] + ("..." if len(f["text"]) > 800 else ""))
             try:
                 is_valid, error_msg = Guardrails.validate_message(payload["message"])
                 if not is_valid:
@@ -1055,7 +1172,7 @@ if user_input:
                                 session_id=payload["session_id"],
                                 user_message=payload["message"],
                                 workflow_override=payload.get("workflow"),
-                                uploaded_context_text=payload.get("document_text"),
+                                attachments=payload.get("attachments"),
                                 stream_handler=token_queue.put,
                                 username=_username,
                             )

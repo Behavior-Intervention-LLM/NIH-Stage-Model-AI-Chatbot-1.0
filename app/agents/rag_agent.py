@@ -45,9 +45,11 @@ class RAGAgent(BaseAgent):
 
     @staticmethod
     def _base_query(state: SessionState, user_message: str) -> str:
-        # The orchestrator may append uploaded-document text to the message;
-        # keep the query to the actual question so TF-IDF matching stays sharp.
-        query = user_message.split("\n\n[Session uploaded context]")[0].strip()
+        # Attachments are no longer spliced into the message, so the message is
+        # the question. Corpus search stays on the question either way: an
+        # attached draft is what the user wants discussed, not what they want
+        # matched against the NIH reference documents.
+        query = user_message.strip()
         stage = state.slots.stage
         if stage:
             query += f" NIH Stage {stage}"
@@ -241,7 +243,7 @@ class RAGAgent(BaseAgent):
             )
 
         previous_queries = list(previous_queries or [])
-        question = user_message.split("\n\n[Session uploaded context]")[0].strip()
+        question = user_message.strip()
         top_k = settings.RAG_TOP_K
 
         if attempt == 0:

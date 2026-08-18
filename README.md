@@ -77,7 +77,6 @@ app/
   tools/
     __init__.py               # tool registry wiring
     base.py                   # BaseTool + ToolRegistry
-    db_tool.py
     vector_tool.py
     versioned_rag_tool.py
     vector_store.py           # TF-IDF store implementation
@@ -227,7 +226,6 @@ requirements.txt
 ### `app/tools/__init__.py`
 - Creates shared `SimpleVectorStore`.
 - Registers tools into global `tool_registry`:
-  - `DBTool`
   - `VectorTool`
   - `VersionedRAGTool`
 
@@ -245,9 +243,6 @@ requirements.txt
 
 ### `app/tools/vector_tool.py`
 - Generic vector retrieval wrapper over local store.
-
-### `app/tools/db_tool.py`
-- Structured lookup helper (including stage definition support).
 
 ### `app/tools/vector_store.py`
 - Local TF-IDF storage/index/search backend.

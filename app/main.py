@@ -142,6 +142,7 @@ async def chat(request: ChatRequest, username: str = Depends(require_auth)):
             user_message=request.message,
             workflow_override=request.workflow,
             uploaded_context_text=request.document_text,
+            uploaded_context_name=request.document_name,
             username=username,
         )
 

@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     VECTOR_DB_URL: Optional[str] = os.getenv("VECTOR_DB_URL")
     VECTOR_DB_API_KEY: Optional[str] = os.getenv("VECTOR_DB_API_KEY")
 
+    # Attached files (chat upload). These are conversation working context —
+    # never indexed into the vector store, never persisted, dropped with the
+    # session. One budget governs how much reaches the model, replacing four
+    # inconsistent caps (3500/file, 12000 merged, 15000 stored, 4500 sent)
+    # whose tightest limit was applied last and silently discarded most of a
+    # multi-file upload.
+    ATTACHMENT_MAX_CHARS: int = int(os.getenv("ATTACHMENT_MAX_CHARS", "24000"))
+
     # Retrieval loop (orchestrator: rag_plan → assess_evidence → retry?)
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))
     # Total retrieval attempts per turn. 1 disables reformulation entirely.

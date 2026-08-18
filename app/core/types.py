@@ -29,7 +29,10 @@ class Message(BaseModel):
 class StageSlots(BaseModel):
     """Stage """
     need_stage: Optional[bool] = None
-    stage: Optional[str] = None  # "0", "I", "II", "III", "IV", "V"
+    # Canonical keys from app/core/stage_model.py:
+    # "0", "IA", "IB", "II", "III", "IV", "V" (bare "I" when Stage I's two
+    # sub-stages cannot be distinguished).
+    stage: Optional[str] = None
     stage_confidence: float = 0.0
     
     user_goal: Optional[str] = None
@@ -67,25 +70,92 @@ class Artifact(BaseModel):
 
 # ====================  ====================
 
+class Attachment(BaseModel):
+    """One file the user attached to this conversation.
+
+    Attachments are working context for the conversation, not corpus
+    material: they are never chunked into the vector store, they live only in
+    memory, and they disappear with the session.
+    """
+    name: str
+    text: str
+    added_at: datetime = Field(default_factory=datetime.now)
+
+    @property
+    def chars(self) -> int:
+        return len(self.text)
+
+
 class SessionState(BaseModel):
     """"""
     session_id: str
     messages: List[Message] = Field(default_factory=list)  #  N （）
     summary: Optional[str] = None  # （）
     slots: StageSlots = Field(default_factory=StageSlots) # If you ask about the stage, reminder of what stage is in
-    artifacts: List[Artifact] = Field(default_factory=list)  # tool 
+    artifacts: List[Artifact] = Field(default_factory=list)  # tool
+    # Deliberately a sibling of `slots`, not a field inside it: the responder
+    # serialises slots into a length-capped block, and attachment text placed
+    # there consumed ~89% of that budget and pushed the stage/workflow fields
+    # it exists to carry off the end.
+    attachments: List[Attachment] = Field(default_factory=list)
     last_route: Optional[str] = None  #  router （ debug）
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
-    
+
     def add_message(self, role: MessageRole, content: str):
         """"""
         self.messages.append(Message(role=role, content=content))
         self.updated_at = datetime.now()
-    
+
     def get_recent_messages(self, n: int = 20) -> List[Message]:
         """ N """
         return self.messages[-n:]
+
+    def add_attachment(self, name: str, text: str) -> bool:
+        """Attach a file's text. Re-attaching the same content is a no-op."""
+        text = (text or "").strip()
+        if not text:
+            return False
+        for existing in self.attachments:
+            if existing.name == name and existing.text == text:
+                return False
+        self.attachments.append(Attachment(name=name, text=text))
+        self.updated_at = datetime.now()
+        return True
+
+    def clear_attachments(self) -> int:
+        removed = len(self.attachments)
+        self.attachments = []
+        self.updated_at = datetime.now()
+        return removed
+
+    def attachment_context(self, budget: int) -> str:
+        """Render attachments for a prompt, sharing `budget` chars between them.
+
+        Every attachment gets a share rather than the first one taking the
+        whole budget, so attaching a second document cannot silently drop it.
+        Truncation is announced in-band so the model knows it is seeing part
+        of a document and can say so.
+        """
+        if not self.attachments or budget <= 0:
+            return ""
+
+        # Headers and truncation notices are part of what gets sent, so they
+        # come out of the budget rather than being added on top of it.
+        overhead = sum(len(f"--- Attachment: {a.name} ---\n\n\n") + 60 for a in self.attachments)
+        usable = max(len(self.attachments) * 200, budget - overhead)
+        per_file = usable // len(self.attachments)
+
+        blocks = []
+        for att in self.attachments:
+            body = att.text
+            if len(body) > per_file:
+                body = (
+                    body[:per_file]
+                    + f"\n… [truncated: showing {per_file} of {len(att.text)} characters]"
+                )
+            blocks.append(f"--- Attachment: {att.name} ---\n{body}")
+        return "\n\n".join(blocks)
 
 
 # ==================== Agent output ====================
@@ -172,7 +242,12 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     message: str
     workflow: Optional[Literal["auto", "navigator", "mechanism_coach", "study_builder", "measure_finder", "grant_partner"]] = None # The intent is here, do we need intent agent
-    document_text: Optional[str] = None  # optional：
+    # Pre-extracted text of a file the caller is attaching to the conversation.
+    # Working context only: never indexed into the vector store, never
+    # persisted, discarded with the session. The server does no file parsing —
+    # API callers extract text themselves; the chat UI does it client-side.
+    document_text: Optional[str] = None
+    document_name: Optional[str] = None
 
 
 class ChatResponse(BaseModel):

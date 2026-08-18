@@ -7,6 +7,7 @@ from typing import Literal
 from app.agents.base import BaseAgent
 from app.config import settings
 from app.core.llm import llm_client
+from app.core.stage_model import is_definition_query
 from app.core.types import AgentOutput, SessionState
 
 
@@ -123,14 +124,16 @@ class IntentAgent(BaseAgent):
         if query_type not in valid_query_types:
             query_type = "general_qa"
 
-        is_definition_query = bool(data.get("is_definition_query", query_type == "definition"))
-        need_stage = bool(data.get("need_stage", intent_label == "stage_guidance" and not is_definition_query))
+        # Local name deliberately differs from the imported is_definition_query
+        # helper, which this method does not use (the LLM already judged it).
+        is_definition = bool(data.get("is_definition_query", query_type == "definition"))
+        need_stage = bool(data.get("need_stage", intent_label == "stage_guidance" and not is_definition))
 
         # Consistency correction: if user intent is stage-related and not a definition query,
         # enforce stage flow gate even when raw LLM booleans are noisy.
-        if query_type in {"stage_classification", "stage_requirements", "next_step"} and not is_definition_query:
+        if query_type in {"stage_classification", "stage_requirements", "next_step"} and not is_definition:
             need_stage = True
-        if query_type == "definition" or is_definition_query:
+        if query_type == "definition" or is_definition:
             need_stage = False
         if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and query_type not in {"definition", "chit_chat", "admin"}:
             need_stage = True
@@ -161,7 +164,7 @@ class IntentAgent(BaseAgent):
             "intent_label": intent_label,
             "query_type": query_type,
             "language": language,
-            "is_definition_query": is_definition_query,
+            "is_definition_query": is_definition,
             "user_goal": user_goal,
             "extracted_signals": extracted_signals,
             "missing_info": missing_info,
@@ -210,28 +213,15 @@ class IntentAgent(BaseAgent):
         qa_keywords = ["what is", "what are", "explain", "tell me", "define", "introduce"]
         chit_chat_keywords = ["hello", "hi", "hey", "thanks", "thank you", "bye", "how are you"]
 
-        is_definition_query = (
-            self._any(
-                message_lower,
-                [
-                    "what is",
-                    "what's",
-                    "define",
-                    "explain",
-                    "introduce",
-                    "how many stages",
-                    "number of stages",
-                    "list stages",
-                ],
-            )
-            and self._any(message_lower, ["nih stage model", "nih stage", "stage model"])
-        )
+        # Shared with StageAgent and ResponderAgent, which used to carry their
+        # own slightly different keyword lists for the same question.
+        is_definition = is_definition_query(user_message)
 
         if self._any(message_lower, ["next step", "what should", "how to proceed", "recommendation"]):
             query_type = "next_step"
         elif self._any(message_lower, ["requirement", "requirements", "criteria"]):
             query_type = "stage_requirements"
-        elif is_definition_query:
+        elif is_definition:
             query_type = "definition"
         elif self._has(message_lower, "stage"):
             query_type = "stage_classification"
@@ -251,7 +241,7 @@ class IntentAgent(BaseAgent):
             confidence = 0.85
             query_type = "chit_chat"
             workflow = "navigator"
-        elif is_definition_query:
+        elif is_definition:
             intent_label = "general_qa"
             need_stage = False
             confidence = 0.88
@@ -271,7 +261,7 @@ class IntentAgent(BaseAgent):
             need_stage = True
 
         extracted_signals = []
-        if is_definition_query:
+        if is_definition:
             extracted_signals.append("definition_query")
         if self._any(message_lower, ["pilot", "feasibility"]):
             extracted_signals.append("feasibility_signal")
@@ -284,23 +274,30 @@ class IntentAgent(BaseAgent):
         if query_type == "next_step":
             user_goal = "Get actionable next-step guidance"
 
+        # The zh variants below had been reduced to fragments — one list entry
+        # was an empty string and the zh clarifying question had lost its text,
+        # so Chinese users were shown blanks.
         missing_info = []
         if need_stage and query_type in {"stage_classification", "next_step"}:
             if language == "zh":
-                missing_info = ["（pilot  RCT）", "", "efficacy/effectiveness"]
+                missing_info = [
+                    "研究设计（试点研究还是随机对照试验）",
+                    "样本量",
+                    "是否已有疗效或效果方面的结果",
+                ]
             else:
                 missing_info = ["study design (pilot vs RCT)", "sample size", "availability of efficacy/effectiveness outcomes"]
 
         clarifying_question = None
         if confidence < 0.6:
             clarifying_question = (
-                " NIH Stage Model recommendation，general QA？"
+                "您是想了解 NIH Stage Model 的阶段判断建议，还是一般性问答？"
                 if language == "zh"
                 else "Are you asking for NIH Stage Model stage guidance or general QA?"
             )
         elif need_stage and query_type in {"stage_classification", "next_step"} and confidence < 0.75:
             clarifying_question = (
-                "To improve stage accuracy, please share study design, sample size, and key outcomes."
+                "为提高阶段判断的准确性，请补充研究设计、样本量和主要结局指标。"
                 if language == "zh"
                 else "To improve stage accuracy, please share study design, sample size, and key outcomes."
             )
@@ -311,7 +308,7 @@ class IntentAgent(BaseAgent):
             "intent_label": intent_label,
             "query_type": query_type,
             "language": language,
-            "is_definition_query": is_definition_query,
+            "is_definition_query": is_definition,
             "user_goal": user_goal,
             "extracted_signals": extracted_signals,
             "missing_info": missing_info,

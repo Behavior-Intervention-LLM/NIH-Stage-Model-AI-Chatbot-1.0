@@ -104,12 +104,32 @@ Each agent wraps an LLM call with a markdown prompt template from `app/prompts/`
 
 ### Tool Layer (`app/tools/`)
 - `ToolRegistry`: plugin-based registration and dispatch
-- `VectorTool` / `VersionedRAGTool`: TF-IDF retrieval from `data/vector_store/`
-- `DBTool`: structured database lookups
+- `VectorTool` / `VersionedRAGTool`: TF-IDF retrieval from `data/vector_store/`.
+  Only `VersionedRAGTool` is reached from the graph; `RAGAgent` hardcodes it.
 - `SimpleVectorStore` (`vector_store.py`): hand-rolled TF-IDF over numpy (not sklearn); no external vector DB.
   Stopwords are dropped at both index and query time, and "Stage II" is
   normalized to a single `stage_ii` token — without that, the pronoun "I" and
   "Stage I" collide and question words outrank subject terms.
+
+### Stage taxonomy (`app/core/stage_model.py`)
+**Single source of truth for the NIH Stage Model.** Stage labels, descriptions,
+classification keywords, progression order (`NEXT_STAGE`), the completed-feature
+ladder, the confidence thresholds, `normalize_stage()` / `find_stage_in_text()` /
+`is_definition_query()`. Never hardcode a stage definition anywhere else — this
+module exists because five hand-maintained copies drifted, four of them onto a
+taxonomy that does not exist (III as effectiveness, IV as implementation, V as
+sustainability).
+
+The correct model, matching `data/documents/def.docx`: 0 Basic Science ·
+I Intervention Generation and Refinement (**IA** generation/manualization, then
+**IB** feasibility/pilot) · II Efficacy in Research Settings · III Efficacy in
+Community Settings · IV Effectiveness Research · V Implementation and
+Dissemination. `STAGES` is the six top-level stages; `CLASSIFICATION_STAGES`
+(`0, IA, IB, II, III, IV, V`) is what the classifier may emit.
+
+Caveat: the Onken 1997/1998 PDFs in the corpus describe the earlier NIDA
+*three*-stage model, where Stage III meant transportability to the community.
+Both prompts warn against blending the two.
 
 ### State & Memory (`app/core/`)
 - `state_store.py`: in-memory dict of `SessionState` keyed by `session_id`
@@ -117,7 +137,7 @@ Each agent wraps an LLM call with a markdown prompt template from `app/prompts/`
 - `types.py`: all Pydantic models — `SessionState`, `StageSlots`, `ChatRequest`, `ChatResponse`, `AgentOutput`, `ToolCall`, `Citation`
 
 ### Prompts (`app/prompts/`)
-Markdown files loaded at agent init. `stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file.
+Markdown files loaded at agent init. `stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file; its stage definitions must stay in step with `app/core/stage_model.py`.
 
 ### Frontend (`frontend_streamlit.py`)
 Streamlit chat UI; calls `POST /chat` on the backend. Includes an expandable debug panel showing the LangGraph execution trace when `DEBUG=true`.
