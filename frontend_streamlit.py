@@ -118,10 +118,6 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "debug_mode" not in st.session_state:
-    st.session_state.debug_mode = False
-if "show_thinking_trace" not in st.session_state:
-    st.session_state.show_thinking_trace = True
 if "selected_workflow" not in st.session_state:
     st.session_state.selected_workflow = "auto"
 if "current_page" not in st.session_state:
@@ -374,94 +370,6 @@ def check_backend_health() -> bool:
         return False
 
 
-def render_thinking_trace(debug_info: dict):
-    """Render lightweight chain-of-thought-like trace in muted gray UI."""
-    if not debug_info:
-        return
-
-    route_mode = debug_info.get("route_mode")
-    route_notes = debug_info.get("route_notes", "")
-    agents_called = debug_info.get("agents_called", [])
-    trace = debug_info.get("execution_trace", []) or []
-
-    lines = []
-    lines.append(f"Route: {route_mode}")
-    if route_notes:
-        lines.append(f"Router notes: {route_notes}")
-    if agents_called:
-        lines.append(f"Agents called: {', '.join(agents_called)}")
-    if debug_info.get("workflow_resolution"):
-        lines.append(f"Workflow resolution: {debug_info.get('workflow_resolution')}")
-    if debug_info.get("workflow_correction"):
-        lines.append(f"Workflow correction: {debug_info.get('workflow_correction')}")
-
-    for step in trace:
-        kind = step.get("kind")
-        name = step.get("name", "unknown")
-        if kind == "agent":
-            conf = step.get("confidence")
-            analysis = step.get("analysis", "")
-            tool_actions = step.get("tool_actions", [])
-            decision_preview = step.get("decision_preview", {}) or {}
-            summary = f"• Agent `{name}`"
-            if conf is not None:
-                summary += f" (conf={conf})"
-            if analysis:
-                summary += f": {analysis}"
-            if decision_preview:
-                summary += f" | decision={decision_preview}"
-            if tool_actions:
-                summary += f" | tool_actions={tool_actions}"
-            lines.append(summary)
-        elif kind == "tool":
-            success = step.get("success", True)
-            sources = step.get("sources", [])
-            err = step.get("error")
-            summary = f"• Tool `{name}` -> {'ok' if success else 'error'}"
-            if sources:
-                summary += f" | sources={sources}"
-            if err:
-                summary += f" | error={err}"
-            lines.append(summary)
-        elif kind == "react":
-            summary = f"• ReAct `{name}`"
-            if step.get("step") is not None:
-                summary += f" (step={step.get('step')})"
-            if step.get("analysis"):
-                summary += f": {step.get('analysis')}"
-            if step.get("reason"):
-                summary += f" | reason={step.get('reason')}"
-            if step.get("planned_tools") is not None:
-                summary += f" | planned_tools={step.get('planned_tools')}"
-            if step.get("successful_results") is not None:
-                summary += f" | successful_results={step.get('successful_results')}"
-            lines.append(summary)
-        elif kind == "guardrail":
-            lines.append(f"• Guardrail `{name}` | warnings_count={step.get('warnings_count', 0)}")
-        elif kind == "gate":
-            lines.append(
-                f"• Gate `{name}` | triggered={step.get('triggered')} | reason={step.get('reason', '')}"
-            )
-
-    html = "<br/>".join(line.replace("<", "&lt;").replace(">", "&gt;") for line in lines)
-    st.markdown(
-        f"""
-            <div style="
-            background: #f6f7f8;
-            border: 1px solid #e6e8eb;
-            border-radius: 8px;
-            padding: 10px 12px;
-            color: #6b7280;
-            font-size: 12px;
-            line-height: 1.45;">
-            <div style="font-weight: 600; color: #9ca3af; margin-bottom: 6px;">Thinking Trace</div>
-            {html}
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_analytics_page():
     """Admin view over the implicit feedback system (app/feedback/).
 
@@ -677,9 +585,13 @@ def render_analytics_page():
             st.success("No recurring failure topics detected.")
 
 
-def render_about_page():
-    """Static About page (content from 'About the NIH Stage Model Chatbot')."""
-    st.title("ℹ️ About the NIH Stage Model Chatbot")
+def render_about_section():
+    """About content, shown inline on the chat page behind a click-to-expand
+    header rather than as a separate page.
+
+    Streamlit forbids nesting expanders, so the example-question groups that
+    used to be expanders are rendered as plain markdown subsections.
+    """
     st.markdown(
         """
         The NIH Stage Model Chatbot is an AI assistant designed to help behavioral
@@ -700,7 +612,7 @@ def render_about_page():
         """
     )
 
-    st.header("Example Questions")
+    st.markdown("#### Example Questions")
     example_sections = [
         (
             "📝 Developing a grant",
@@ -745,9 +657,9 @@ def render_about_page():
         ),
     ]
     for section_title, questions in example_sections:
-        with st.expander(section_title):
-            for q in questions:
-                st.markdown(f"- {q}")
+        st.markdown(f"**{section_title}**")
+        for q in questions:
+            st.markdown(f"- {q}")
 
     st.info(
         "**Tip:** The chatbot works best when you provide context. Paste a draft "
@@ -791,7 +703,23 @@ def render_workflow_cards():
                 st.button(title, key=f"workflow_{value}", use_container_width=True, disabled=True)
                 st.caption("🚧 In development")
 
-    # st.info(f"Current workflow mode: **{st.session_state.selected_workflow}**")
+    # Usage guidance sits with the workflow it describes instead of in a
+    # separate sidebar panel.
+    if st.session_state.selected_workflow == "auto":
+        with st.container(border=True):
+            st.markdown(
+                """
+                **How to use Auto:**
+                1. Type your question
+                2. The system detects intent/stage automatically
+                3. Review answer, reasoning, and references
+
+                **Example prompts:**
+                - "What is NIH Stage Model?"
+                - "Our study is a pilot feasibility trial. Which stage is it?"
+                - "What are Stage I requirements?"
+                """
+            )
 
 
 with st.sidebar:
@@ -827,28 +755,29 @@ with st.sidebar:
     # (ANALYTICS_ADMIN_USERS, or any user when AUTH_DISABLED).
     from app.feedback import is_admin as _is_admin
 
-    _pages = ["chat", "about"]
+    _pages = ["chat"]
     if _is_admin(_history_username()):
         _pages.append("analytics")
     if st.session_state.current_page not in _pages:
         st.session_state.current_page = "chat"
 
-    nav_choice = st.radio(
-        "Page",
-        options=_pages,
-        index=_pages.index(st.session_state.current_page),
-        format_func=lambda p: {
-            "chat": "💬 Chat",
-            "about": "ℹ️ About",
-            "analytics": "📊 Analytics",
-        }[p],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    if nav_choice != st.session_state.current_page:
-        st.session_state.current_page = nav_choice
-        st.rerun()
-    st.markdown("---")
+    # Only admins have anywhere else to go; a one-option radio is noise.
+    if len(_pages) > 1:
+        nav_choice = st.radio(
+            "Page",
+            options=_pages,
+            index=_pages.index(st.session_state.current_page),
+            format_func=lambda p: {
+                "chat": "💬 Chat",
+                "analytics": "📊 Analytics",
+            }[p],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        if nav_choice != st.session_state.current_page:
+            st.session_state.current_page = nav_choice
+            st.rerun()
+        st.markdown("---")
 
     st.subheader("Conversations")
     if st.button("➕ New Chat", use_container_width=True):
@@ -895,40 +824,12 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.subheader("Settings")
-    st.session_state.debug_mode = st.checkbox("Debug Mode", value=st.session_state.debug_mode)
-    st.session_state.show_thinking_trace = st.checkbox(
-        "Show Thinking Trace",
-        value=st.session_state.show_thinking_trace,
-    )
-
-    st.markdown("---")
     st.subheader("System Status")
     backend_ok = check_backend_health()
     if backend_ok:
         st.success("✅ System Ready")
     else:
         st.error("❌ System failed to initialize")
-
-    st.markdown("---")
-    with st.expander("📖 Usage"):
-        st.markdown(
-            """
-            **How to use:**
-            1. Type your question
-            2. The system detects intent/stage automatically
-            3. Review answer, reasoning, and references
-
-            **Example prompts:**
-            - "What is NIH Stage Model?"
-            - "Our study is a pilot feasibility trial. Which stage is it?"
-            - "What are Stage I requirements?"
-            """
-        )
-
-if st.session_state.current_page == "about":
-    render_about_page()
-    st.stop()
 
 if st.session_state.current_page == "analytics":
     render_analytics_page()
@@ -1012,6 +913,10 @@ def render_rating_controls(message: dict) -> None:
 
 st.title("🔬 NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
+
+with st.expander("ℹ️ About the NIH Stage Model Chatbot", expanded=False):
+    render_about_section()
+
 render_workflow_cards()
 
 active_conv = get_active_conversation()
@@ -1025,11 +930,6 @@ if not backend_ok:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        if st.session_state.debug_mode and message.get("debug"):
-            with st.expander("🔍 Debug Info"):
-                st.json(message["debug"])
-        if st.session_state.show_thinking_trace and message.get("debug"):
-            render_thinking_trace(message.get("debug") or {})
         if message["role"] == "assistant":
             render_rating_controls(message)
 
@@ -1146,7 +1046,6 @@ if user_input:
                         "role": "assistant",
                         "content": reply,
                         "timestamp": datetime.now().isoformat(),
-                        "debug": {},
                     })
                     sync_active_conversation_messages()
                     _record_exchange(user_input, reply)
@@ -1200,30 +1099,11 @@ if user_input:
                     reply = Guardrails.sanitize_response(reply)
 
                     debug_info = debug_info or {}
-                    if debug_info and st.session_state.debug_mode:
-                        with st.expander("🔍 Debug Info", expanded=False):
-                            st.json(debug_info)
-                            if debug_info.get("stage"):
-                                st.metric("Detected Stage", debug_info.get("stage"))
-                            if debug_info.get("stage_confidence") is not None:
-                                st.metric(
-                                    "Stage Confidence",
-                                    f"{debug_info.get('stage_confidence'):.2f}",
-                                )
-                            if debug_info.get("route_mode"):
-                                st.text(f"Route Mode: {debug_info.get('route_mode')}")
-                            if debug_info.get("agents_called"):
-                                st.text(
-                                    f"Called Agents: {', '.join(debug_info.get('agents_called', []))}"
-                                )
-                    if debug_info and st.session_state.show_thinking_trace:
-                        render_thinking_trace(debug_info)
 
                     assistant_message = {
                         "role": "assistant",
                         "content": reply,
                         "timestamp": datetime.now().isoformat(),
-                        "debug": debug_info,
                         # Identifies this turn for an explicit rating.
                         "turn_uid": debug_info.get("turn_uid"),
                     }
@@ -1237,8 +1117,6 @@ if user_input:
 
             except Exception as exc:
                 st.error(f"❌ Error: {str(exc)}")
-                if st.session_state.debug_mode:
-                    st.exception(exc)
 
 # st.markdown("---")
 # st.caption("NIH Stage Model AI Chatbot | Built with Streamlit")

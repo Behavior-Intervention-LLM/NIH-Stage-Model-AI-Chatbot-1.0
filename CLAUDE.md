@@ -140,4 +140,8 @@ Both prompts warn against blending the two.
 Markdown files loaded at agent init. `stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file; its stage definitions must stay in step with `app/core/stage_model.py`.
 
 ### Frontend (`frontend_streamlit.py`)
-Streamlit chat UI; calls `POST /chat` on the backend. Includes an expandable debug panel showing the LangGraph execution trace when `DEBUG=true`.
+Streamlit chat UI; calls `POST /chat` on the backend. The About content sits
+in a collapsed expander on the chat page (not a separate nav page), and the
+Auto workflow card carries the usage guidance. The debug-JSON panel and
+thinking-trace panel were removed from the UI; `debug_trace` is still
+returned by the API and is still used in the frontend for `turn_uid`.
