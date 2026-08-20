@@ -32,11 +32,141 @@ def get_orchestrator():
     orch = Orchestrator(tool_registry=tool_registry)
     return orch
 
+# Brand artwork. Paths are resolved against this file so the app works no
+# matter what the working directory is (local run vs. Streamlit Cloud).
+_VISUALS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "visuals", "web")
+BID_LOGO = os.path.join(_VISUALS, "bid_logo_horizontal.png")  # full lockup + wordmark
+BID_BADGE = os.path.join(_VISUALS, "bid_badge.png")           # square "BID" mark
+ICON_ABOUT = os.path.join(_VISUALS, "icon_about.png")
+ICON_CHANGE_PASSWORD = os.path.join(_VISUALS, "icon_change_password.png")
+ICON_LOG_OUT = os.path.join(_VISUALS, "icon_log_out.png")
+ICON_QUESTION = os.path.join(_VISUALS, "icon_question.png")
+BID_TEAL = "#13a89e"  # sampled from the icon artwork
+
+
+def _art(path, fallback=None):
+    """Return an image path only if it exists, else a safe fallback."""
+    return path if os.path.exists(path) else fallback
+
+
+@st.cache_data(show_spinner=False)
+def _data_uri(path):
+    """Read an image as a base64 data: URI, or return "" if it is missing.
+
+    Icons are inlined rather than served from /media because they are applied
+    through CSS, which cannot reach Streamlit's media endpoint by path.
+    """
+    if not os.path.exists(path):
+        return ""
+    import base64
+
+    with open(path, "rb") as fh:
+        return "data:image/png;base64," + base64.b64encode(fh.read()).decode("ascii")
+
+
+def _icon_img(path, height="1.15em"):
+    """Inline <img> for an icon, for use inside st.markdown(unsafe_allow_html=True)."""
+    uri = _data_uri(path)
+    if not uri:
+        return ""
+    return (
+        f'<img src="{uri}" alt="" style="height:{height};width:auto;'
+        f'vertical-align:-0.18em;margin-right:0.4em">'
+    )
+
+
+def _widget_icon_css(key, path, target="button", size="1.25em"):
+    """CSS that draws `path` before the label of the widget created with `key`.
+
+    st.button/st.expander only accept emoji or Material names for `icon=`, so a
+    PNG has to go in as a ::before background on the widget's label. Streamlit
+    stamps `st-key-<key>` on the container of any keyed widget, which is what
+    makes this addressable.
+
+    `target` must name the element that actually holds the label -- "button" or
+    "summary" (an expander header). Matching every markdown paragraph under the
+    container instead would stamp the icon on each child widget's label too.
+    """
+    uri = _data_uri(path)
+    if not uri:
+        return ""
+    return f"""
+      .st-key-{key} {target} [data-testid="stMarkdownContainer"] > p::before {{
+          content: "";
+          display: inline-block;
+          width: {size};
+          height: {size};
+          margin-right: 0.45em;
+          vertical-align: -0.22em;
+          background-image: url("{uri}");
+          background-size: contain;
+          background-repeat: no-repeat;
+          background-position: center;
+      }}
+    """
+
+
 st.set_page_config(
     page_title="NIH Stage Model AI Chatbot",
-    page_icon="🔬",
+    page_icon=_art(BID_BADGE, "🔬"),
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+# Top-left app logo: the full BID lockup when the sidebar is open, the square
+# badge when it is collapsed. Set before anything renders so it also shows on
+# the login gate.
+if _art(BID_LOGO):
+    st.logo(BID_LOGO, size="large", icon_image=_art(BID_BADGE, BID_LOGO))
+    # st.logo caps even "large" at ~2rem tall, which leaves the three-line
+    # wordmark unreadable. Give the lockup enough height to be legible while
+    # keeping the collapsed badge small.
+    st.markdown(
+        """
+        <style>
+          /* The sidebar header is a fixed 60px flex row; a taller logo centers
+             to a negative offset and gets clipped, so give it room first. */
+          [data-testid="stSidebarHeader"] {
+              min-height: 6rem;
+              align-items: center;
+          }
+          img[data-testid="stSidebarLogo"] {
+              height: 4.75rem !important;
+              max-height: 4.75rem !important;
+              width: auto !important;
+              margin: 0.25rem 0 0.5rem 0;
+          }
+          [data-testid="stSidebarCollapsedControl"] img.stLogo {
+              height: 2rem !important;
+              max-height: 2rem !important;
+              width: auto !important;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# PNG icons in place of the emoji that used to label these widgets.
+st.markdown(
+    "<style>"
+    # Material icons stand in for emoji where there is no PNG; tint them to the
+    # brand teal so they sit with the PNG icons. Scoped to the places they are
+    # used -- a blanket rule would repaint Streamlit's own chrome, and the
+    # success/error alerts need to keep their own semantic colors.
+    + f"""
+      /* icon= on a widget renders as stIconMaterial ... */
+      [data-testid="stSidebar"] [data-testid="stButton"] [data-testid="stIconMaterial"],
+      /* ... while :material/x: inside markdown renders as a plain span[role=img]. */
+      .st-key-page_nav [data-testid="stRadioOption"] span[role="img"],
+      [data-testid="stCaptionContainer"] span[role="img"] {{
+          color: {BID_TEAL};
+      }}
+    """
+    + _widget_icon_css("logout_btn", ICON_LOG_OUT, target="button")
+    + _widget_icon_css("change_pw_expander", ICON_CHANGE_PASSWORD, target="summary")
+    + _widget_icon_css("about_expander", ICON_ABOUT, target="summary")
+    + "</style>",
+    unsafe_allow_html=True,
 )
 
 # Access Authentication (users.db-backed, see auth.py)
@@ -58,7 +188,7 @@ def _require_auth():
         seed_users_from_env()
         st.session_state._seed_checked = True
 
-    st.title("🔬 NIH Stage Model AI Chatbot")
+    st.title("NIH Stage Model AI Chatbot")
     st.markdown("This tool is for authorized users only. Sign in to continue.")
 
     # Self-signup is disabled unless an invite code is configured.
@@ -612,7 +742,10 @@ def render_about_section():
         """
     )
 
-    st.markdown("#### Example Questions")
+    st.markdown(
+        f'<h4>{_icon_img(ICON_QUESTION)}Example Questions</h4>',
+        unsafe_allow_html=True,
+    )
     example_sections = [
         (
             "📝 Developing a grant",
@@ -701,7 +834,7 @@ def render_workflow_cards():
                 st.caption(subtitle)
             else:
                 st.button(title, key=f"workflow_{value}", use_container_width=True, disabled=True)
-                st.caption("🚧 In development")
+                st.caption(":material/construction: In development")
 
     # Usage guidance sits with the workflow it describes instead of in a
     # separate sidebar panel.
@@ -723,17 +856,19 @@ def render_workflow_cards():
 
 
 with st.sidebar:
-    st.title("🔬 NIH Stage Model")
+    # The BID lockup already sits above this via st.logo(), so the sidebar
+    # heading stays small to avoid stacking two brand marks.
+    st.markdown("#### NIH Stage Model")
     if st.session_state.get("authenticated"):
         st.caption(f"Signed in as **{st.session_state.get('auth_username', 'user')}**")
-        if st.button("🚪 Log Out", use_container_width=True):
+        if st.button("Log Out", key="logout_btn", use_container_width=True):
             st.session_state.authenticated = False
             st.session_state.auth_username = None
             # Drop per-user state so the next login reloads its own history.
             for _key in ("conversations", "active_conversation_id", "messages", "session_id"):
                 st.session_state.pop(_key, None)
             st.rerun()
-        with st.expander("🔑 Change Password"):
+        with st.expander("Change Password", key="change_pw_expander"):
             with st.form("change_password_form"):
                 current_pw = st.text_input("Current password", type="password")
                 new_pw = st.text_input("New password", type="password")
@@ -766,10 +901,11 @@ with st.sidebar:
         nav_choice = st.radio(
             "Page",
             options=_pages,
+            key="page_nav",
             index=_pages.index(st.session_state.current_page),
             format_func=lambda p: {
-                "chat": "💬 Chat",
-                "analytics": "📊 Analytics",
+                "chat": ":material/forum: Chat",
+                "analytics": ":material/bar_chart: Analytics",
             }[p],
             horizontal=True,
             label_visibility="collapsed",
@@ -780,7 +916,7 @@ with st.sidebar:
         st.markdown("---")
 
     st.subheader("Conversations")
-    if st.button("➕ New Chat", use_container_width=True):
+    if st.button("New Chat", icon=":material/add:", use_container_width=True):
         create_new_conversation()
         st.rerun()
 
@@ -805,7 +941,9 @@ with st.sidebar:
     active_conv = get_active_conversation()
     # st.caption(f"Session ID: `{active_conv['session_id'][:8]}...`")
 
-    if st.button("🗑️ Delete Current Chat", use_container_width=True):
+    if st.button(
+        "Delete Current Chat", icon=":material/delete:", use_container_width=True
+    ):
         _deleted_id = st.session_state.active_conversation_id
         try:
             chat_history.delete_conversation(_history_username(), _deleted_id)
@@ -827,9 +965,9 @@ with st.sidebar:
     st.subheader("System Status")
     backend_ok = check_backend_health()
     if backend_ok:
-        st.success("✅ System Ready")
+        st.success("System Ready", icon=":material/check_circle:")
     else:
-        st.error("❌ System failed to initialize")
+        st.error("System failed to initialize", icon=":material/error:")
 
 if st.session_state.current_page == "analytics":
     render_analytics_page()
@@ -911,10 +1049,12 @@ def render_rating_controls(message: dict) -> None:
                 st.success("Comment saved.")
 
 
-st.title("🔬 NIH Stage Model AI Chatbot")
+st.title("NIH Stage Model AI Chatbot")
 st.markdown("A multi-agent assistant for NIH Stage Model guidance.")
 
-with st.expander("ℹ️ About the NIH Stage Model Chatbot", expanded=False):
+with st.expander(
+    "About the NIH Stage Model Chatbot", key="about_expander", expanded=False
+):
     render_about_section()
 
 render_workflow_cards()

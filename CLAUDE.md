@@ -140,7 +140,18 @@ Both prompts warn against blending the two.
 Markdown files loaded at agent init. `stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file; its stage definitions must stay in step with `app/core/stage_model.py`.
 
 ### Frontend (`frontend_streamlit.py`)
-Streamlit chat UI; calls `POST /chat` on the backend. The About content sits
+Streamlit chat UI; calls `POST /chat` on the backend. Branding comes from
+`visuals/web/` — `st.logo()` puts the BID lockup top-left (the square badge
+when the sidebar is collapsed) as the app's only brand mark, the badge is also
+the favicon, and PNG icons
+replace the emoji on the About / Change Password / Log Out widgets and the
+Example Questions heading. Since `st.button`/`st.expander` take only emoji or
+Material names for `icon=`, image icons are injected as CSS `::before`
+backgrounds keyed on `st-key-<key>`. Where no PNG exists (sidebar nav, New
+Chat/Delete, System Status, the "In development" card captions) Streamlit's
+Material icons stand in, tinted to `BID_TEAL`. Never load from `visuals/` directly: the
+two logo originals there are PSDs misnamed `.png`. See
+`visuals/web/README.md` to regenerate or to add another icon. The About content sits
 in a collapsed expander on the chat page (not a separate nav page), and the
 Auto workflow card carries the usage guidance. The debug-JSON panel and
 thinking-trace panel were removed from the UI; `debug_trace` is still
