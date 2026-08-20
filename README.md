@@ -77,12 +77,11 @@ app/
   tools/
     __init__.py               # tool registry wiring
     base.py                   # BaseTool + ToolRegistry
-    db_tool.py
     vector_tool.py
     versioned_rag_tool.py
     vector_store.py           # TF-IDF store implementation
     document_loader.py        # PDF/DOC/DOCX loader + chunking
-frontend_streamlit.py         # chat UI + debug/thinking trace
+frontend_streamlit.py         # chat UI (chat, About expander, analytics)
 load_documents.py             # ingest docs into vector store
 requirements.txt
 ```
@@ -227,7 +226,6 @@ requirements.txt
 ### `app/tools/__init__.py`
 - Creates shared `SimpleVectorStore`.
 - Registers tools into global `tool_registry`:
-  - `DBTool`
   - `VectorTool`
   - `VersionedRAGTool`
 
@@ -245,9 +243,6 @@ requirements.txt
 
 ### `app/tools/vector_tool.py`
 - Generic vector retrieval wrapper over local store.
-
-### `app/tools/db_tool.py`
-- Structured lookup helper (including stage definition support).
 
 ### `app/tools/vector_store.py`
 - Local TF-IDF storage/index/search backend.
@@ -280,12 +275,13 @@ requirements.txt
 ### `frontend_streamlit.py`
 - Chat UI with session controls.
 - Backend health indicator.
-- Debug mode view (`debug` JSON).
-- Thinking trace panel:
-  - route mode / route notes
-  - agent calls with analysis/confidence
-  - tool calls + sources
-  - gate steps (including `clarify_only_gate`)
+- About content in a click-to-expand panel on the chat page.
+- Usage guidance shown with the Auto workflow card.
+- Admin-only analytics page.
+
+The debug (`debug` JSON) and thinking-trace panels were removed from the UI;
+the orchestrator still returns `debug_trace`, which the frontend reads only for
+the rating `turn_uid`.
 
 ---
 
@@ -399,9 +395,7 @@ Configured in `app/config.py` (env-compatible):
 - `DOCUMENTS_DIR`
 
 Default local model stack:
-- Ollama
-- `qwen2.5:3b-instruct`
-
+OpenAI : GPT5.4
 ---
 
 ## 8) Local Run

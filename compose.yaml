@@ -1,6 +1,0 @@
-services:
-  nihstagemodelaichatbot1:
-    image: nihstagemodelaichatbot1
-    build:
-      context: .
-      dockerfile: ./Dockerfile

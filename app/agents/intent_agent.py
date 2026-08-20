@@ -5,7 +5,9 @@ import re
 from typing import Literal
 
 from app.agents.base import BaseAgent
+from app.config import settings
 from app.core.llm import llm_client
+from app.core.stage_model import is_definition_query
 from app.core.types import AgentOutput, SessionState
 
 
@@ -13,12 +15,10 @@ class IntentAgent(BaseAgent):
     """Intent recognition and request extraction agent."""
 
     INTENT_LABELS = Literal[
-        "stage_guidance",
-        "general_qa",
-        "chit_chat",
-        "admin",
-        "debug",
-        "unknown",
+        "stage_identification",
+        "general_question_and_answer",
+        "behavioral_intervention_related",
+        "non-behavioral_intervention_related",
     ]
 
     def __init__(self):
@@ -39,6 +39,24 @@ class IntentAgent(BaseAgent):
     @staticmethod
     def _detect_language(text: str) -> str:
         return "zh" if re.search(r"[\u4e00-\u9fff]", text or "") else "en"
+
+    @staticmethod
+    def _has(text: str, phrase: str) -> bool:
+        """Whole-word keyword match.
+
+        Plain `phrase in text` misfires badly on the short keywords below:
+        "hi" matches inside "something", "so" inside "personal", which
+        silently routed ordinary questions to chit_chat and skipped retrieval.
+        """
+        return re.search(rf"\b{re.escape(phrase)}\b", text) is not None
+
+    @classmethod
+    def _any(cls, text: str, phrases: list[str]) -> bool:
+        return any(cls._has(text, p) for p in phrases)
+
+    @classmethod
+    def _count(cls, text: str, phrases: list[str]) -> int:
+        return sum(1 for p in phrases if cls._has(text, p))
 
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
         llm_output = self._run_with_llm(user_message, context)
@@ -70,7 +88,11 @@ class IntentAgent(BaseAgent):
             f"context: {context[:1200]}\n"
             "Classify and extract fields for downstream responder."
         )
-        data = llm_client.chat_json(system_prompt=system_prompt, user_prompt=user_prompt)
+        data = llm_client.chat_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=settings.LLM_INTENT_MODEL or None,
+        )
         if not data:
             return None
 
@@ -102,14 +124,16 @@ class IntentAgent(BaseAgent):
         if query_type not in valid_query_types:
             query_type = "general_qa"
 
-        is_definition_query = bool(data.get("is_definition_query", query_type == "definition"))
-        need_stage = bool(data.get("need_stage", intent_label == "stage_guidance" and not is_definition_query))
+        # Local name deliberately differs from the imported is_definition_query
+        # helper, which this method does not use (the LLM already judged it).
+        is_definition = bool(data.get("is_definition_query", query_type == "definition"))
+        need_stage = bool(data.get("need_stage", intent_label == "stage_guidance" and not is_definition))
 
         # Consistency correction: if user intent is stage-related and not a definition query,
         # enforce stage flow gate even when raw LLM booleans are noisy.
-        if query_type in {"stage_classification", "stage_requirements", "next_step"} and not is_definition_query:
+        if query_type in {"stage_classification", "stage_requirements", "next_step"} and not is_definition:
             need_stage = True
-        if query_type == "definition" or is_definition_query:
+        if query_type == "definition" or is_definition:
             need_stage = False
         if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and query_type not in {"definition", "chit_chat", "admin"}:
             need_stage = True
@@ -140,7 +164,7 @@ class IntentAgent(BaseAgent):
             "intent_label": intent_label,
             "query_type": query_type,
             "language": language,
-            "is_definition_query": is_definition_query,
+            "is_definition_query": is_definition,
             "user_goal": user_goal,
             "extracted_signals": extracted_signals,
             "missing_info": missing_info,
@@ -163,6 +187,8 @@ class IntentAgent(BaseAgent):
         confidence = 0.45
         query_type = "general_qa"
 
+        # These lists carried duplicate entries (a zh/en pair collapsed into two
+        # identical English strings), which double-counted the same hit.
         stage_keywords = [
             "nih stage",
             "stage model",
@@ -172,53 +198,38 @@ class IntentAgent(BaseAgent):
             "stage iii",
             "stage iv",
             "stage v",
-            "intervention",
-            "mechanism",
-            "efficacy",
-            "effectiveness",
-            "implementation",
-            "sustainability",
             "stage",
             "intervention",
             "mechanism",
             "efficacy",
             "effectiveness",
             "implementation",
+            "sustainability",
         ]
-        stage_task_keywords = ["requirements", "criteria", "next step", "what should", "requirements", "next step", "how to proceed", "recommendation"]
-        qa_keywords = ["what is", "what are", "explain", "tell me", "define", "what is", "explain", "introduce"]
-        chit_chat_keywords = ["hello", "hi", "thanks", "thank you", "bye", "how are you", "hello", "hi", "thanks"]
+        stage_task_keywords = [
+            "requirements", "criteria", "next step", "what should",
+            "how to proceed", "recommendation",
+        ]
+        qa_keywords = ["what is", "what are", "explain", "tell me", "define", "introduce"]
+        chit_chat_keywords = ["hello", "hi", "hey", "thanks", "thank you", "bye", "how are you"]
 
-        is_definition_query = (
-            any(
-                k in message_lower
-                for k in [
-                    "what is",
-                    "what's",
-                    "define",
-                    "explain",
-                    "introduce",
-                    "how many stages",
-                    "number of stages",
-                    "list stages",
-                ]
-            )
-            and any(k in message_lower for k in ["nih stage model", "nih stage", "stage model", "stage model"])
-        )
+        # Shared with StageAgent and ResponderAgent, which used to carry their
+        # own slightly different keyword lists for the same question.
+        is_definition = is_definition_query(user_message)
 
-        if any(k in message_lower for k in ["next step", "what should", "next step", "how to proceed", "recommendation"]):
+        if self._any(message_lower, ["next step", "what should", "how to proceed", "recommendation"]):
             query_type = "next_step"
-        elif any(k in message_lower for k in ["requirement", "requirements", "criteria", "requirements", "criteria"]):
+        elif self._any(message_lower, ["requirement", "requirements", "criteria"]):
             query_type = "stage_requirements"
-        elif is_definition_query:
+        elif is_definition:
             query_type = "definition"
-        elif "stage" in message_lower or "stage" in message_lower:
+        elif self._has(message_lower, "stage"):
             query_type = "stage_classification"
 
-        stage_score = sum(1 for kw in stage_keywords if kw in message_lower)
-        stage_task_score = sum(1 for kw in stage_task_keywords if kw in message_lower)
-        qa_score = sum(1 for kw in qa_keywords if kw in message_lower)
-        chat_score = sum(1 for kw in chit_chat_keywords if kw in message_lower)
+        stage_score = self._count(message_lower, stage_keywords)
+        stage_task_score = self._count(message_lower, stage_task_keywords)
+        qa_score = self._count(message_lower, qa_keywords)
+        chat_score = self._count(message_lower, chit_chat_keywords)
 
         if message_lower.startswith("/"):
             intent_label = "admin"
@@ -230,7 +241,7 @@ class IntentAgent(BaseAgent):
             confidence = 0.85
             query_type = "chit_chat"
             workflow = "navigator"
-        elif is_definition_query:
+        elif is_definition:
             intent_label = "general_qa"
             need_stage = False
             confidence = 0.88
@@ -250,36 +261,43 @@ class IntentAgent(BaseAgent):
             need_stage = True
 
         extracted_signals = []
-        if is_definition_query:
+        if is_definition:
             extracted_signals.append("definition_query")
-        if "pilot" in message_lower or "feasibility" in message_lower:
+        if self._any(message_lower, ["pilot", "feasibility"]):
             extracted_signals.append("feasibility_signal")
-        if "rct" in message_lower or "randomized" in message_lower:
+        if self._any(message_lower, ["rct", "randomized"]):
             extracted_signals.append("rct_signal")
-        if "mechanism" in message_lower or "mechanism" in message_lower:
+        if self._has(message_lower, "mechanism"):
             extracted_signals.append("mechanism_signal")
 
         user_goal = None
         if query_type == "next_step":
             user_goal = "Get actionable next-step guidance"
 
+        # The zh variants below had been reduced to fragments — one list entry
+        # was an empty string and the zh clarifying question had lost its text,
+        # so Chinese users were shown blanks.
         missing_info = []
         if need_stage and query_type in {"stage_classification", "next_step"}:
             if language == "zh":
-                missing_info = ["（pilot  RCT）", "", "efficacy/effectiveness"]
+                missing_info = [
+                    "研究设计（试点研究还是随机对照试验）",
+                    "样本量",
+                    "是否已有疗效或效果方面的结果",
+                ]
             else:
                 missing_info = ["study design (pilot vs RCT)", "sample size", "availability of efficacy/effectiveness outcomes"]
 
         clarifying_question = None
         if confidence < 0.6:
             clarifying_question = (
-                " NIH Stage Model recommendation，general QA？"
+                "您是想了解 NIH Stage Model 的阶段判断建议，还是一般性问答？"
                 if language == "zh"
                 else "Are you asking for NIH Stage Model stage guidance or general QA?"
             )
         elif need_stage and query_type in {"stage_classification", "next_step"} and confidence < 0.75:
             clarifying_question = (
-                "To improve stage accuracy, please share study design, sample size, and key outcomes."
+                "为提高阶段判断的准确性，请补充研究设计、样本量和主要结局指标。"
                 if language == "zh"
                 else "To improve stage accuracy, please share study design, sample size, and key outcomes."
             )
@@ -290,7 +308,7 @@ class IntentAgent(BaseAgent):
             "intent_label": intent_label,
             "query_type": query_type,
             "language": language,
-            "is_definition_query": is_definition_query,
+            "is_definition_query": is_definition,
             "user_goal": user_goal,
             "extracted_signals": extracted_signals,
             "missing_info": missing_info,

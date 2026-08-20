@@ -1,27 +1,51 @@
-**/__pycache__
-**/.venv
-**/.classpath
-**/.dockerignore
-**/.env
-**/.git
-**/.gitignore
-**/.project
-**/.settings
-**/.toolstarget
-**/.vs
-**/.vscode
-**/*.*proj.user
-**/*.dbmdl
-**/*.jfm
-**/bin
-**/charts
-**/docker-compose*
-**/compose*
-**/Dockerfile*
-**/node_modules
-**/npm-debug.log
-**/obj
-**/secrets.dev.yaml
-**/values.dev.yaml
-LICENSE
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment files (pass secrets via docker-compose env_file or EC2 instance profile)
+.env
+*.env
+!.env.example
+
+# Development / IDE
+.vscode/
+.idea/
+*.swp
+
+# Version control
+.git/
+.gitignore
+
+# Docker files (not needed inside the container)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Local runtime data (mounted as volumes at runtime instead)
+local_storage/
+
+# Reference / dev-only content
+notebook/
+idea_files/
+*.ipynb
+.ipynb_checkpoints/
+
+# Docs
 README.md
+CLAUDE.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# User credentials DB (mounted as a volume at runtime, never baked into images)
+users.db
+db

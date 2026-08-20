@@ -3,10 +3,53 @@
 """
 import os
 import json
+import re
 from typing import List, Dict, Optional
 from pathlib import Path
 import numpy as np
 from app.tools.document_loader import DocumentChunk
+
+
+# Function words are dropped at BOTH index and query time.
+#
+# Without this, IDF works against us: question words are rare in academic
+# prose but common in user questions, so they score as highly distinctive.
+# Measured on this corpus, "what" had idf 3.80 — above "stage" (2.00) and
+# "efficacy" (3.35) — so "How do I move from efficacy to effectiveness?"
+# was matched primarily on the word "move". Retrieval tracked phrasing
+# rather than subject matter.
+_STOPWORDS = {
+    "a", "about", "after", "an", "and", "any", "are", "as", "at", "be", "been",
+    "but", "by", "can", "could", "did", "do", "does", "for", "from", "get",
+    "had", "has", "have", "how", "i", "if", "in", "is", "it", "its", "just",
+    "like", "many", "me", "much", "my", "need", "of", "on", "or", "please",
+    "should", "so", "some", "tell", "than", "that", "the", "their", "them",
+    "then", "there", "these", "they", "this", "to", "us", "was", "we", "were",
+    "what", "whats", "when", "where", "which", "who", "why", "will", "with",
+    "would", "you", "your",
+}
+
+# "Stage II" tokenizes to ["stage", "ii"], which loses the pairing and leaves
+# the bare numeral to match any other stage. Worse, the pronoun "I" and
+# "Stage I" are the same token — so "I" cannot be stopworded without
+# destroying stage-one queries. Collapsing the phrase into one token
+# ("stage_ii") fixes both: the stage becomes a single high-signal term and
+# the stray pronoun becomes safe to drop. Alternatives are ordered
+# longest-first so "IV" is not consumed as "I".
+_STAGE_PHRASE_RE = re.compile(r"\bstages?\s+(0|iv|iii|ii|ib|ia|i|v)\b", re.IGNORECASE)
+
+_TOKEN_RE = re.compile(r'[一-鿿]+|[a-z]+_[a-z0-9]+|[a-zA-Z]+|\d+')
+
+
+def _normalize(text: str) -> str:
+    return _STAGE_PHRASE_RE.sub(lambda m: f" stage_{m.group(1).lower()} ", text.lower())
+
+
+def _tokenize(text: str, remove_stopwords: bool = True) -> List[str]:
+    tokens = _TOKEN_RE.findall(_normalize(text))
+    if remove_stopwords:
+        tokens = [t for t in tokens if t not in _STOPWORDS]
+    return tokens
 
 
 class SimpleVectorStore:
@@ -31,28 +74,49 @@ class SimpleVectorStore:
         # 
         self._load()
     
-    def add_chunks(self, chunks: List[DocumentChunk]):
-        """"""
-        self.chunks.extend(chunks)
+    def add_chunks(self, chunks: List[DocumentChunk], replace: bool = False):
+        """Index chunks, skipping any already present.
+
+        `replace=True` rebuilds the store from scratch — use it for a full
+        re-ingest. The previous behaviour was an unconditional extend, so
+        re-running the ingestion script appended a second complete copy of
+        every document. That is how the shipped index reached 641 chunks
+        holding only 186 unique passages: top-k came back as the same passage
+        repeated, cutting effective retrieval depth to one.
+        """
+        if replace:
+            self.chunks = []
+            self.vocabulary = {}
+            self.idf = {}
+            self.vectors = None
+
+        seen = {(c.source, c.content) for c in self.chunks}
+        added = 0
+        for chunk in chunks:
+            key = (chunk.source, chunk.content)
+            if key in seen:
+                continue
+            seen.add(key)
+            self.chunks.append(chunk)
+            added += 1
+
         self._rebuild_index()
         self._save()
-    
+        return added
+
     def _rebuild_index(self):
-        """（TF-IDF）"""
+        """Rebuild the TF-IDF matrix over self.chunks."""
         if not self.chunks:
             return
-        
-        # 
-        def tokenize(text: str) -> List[str]:
-            import re
-            # （）
-            tokens = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z]+|\d+', text.lower())
-            return tokens
-        
-        # 
+
+        # Vocabulary and IDF derive wholly from the current chunks and must
+        # not carry over terms from a previous corpus.
+        self.vocabulary = {}
+        self.idf = {}
+
         all_tokens = []
         for chunk in self.chunks:
-            tokens = tokenize(chunk.content)
+            tokens = _tokenize(chunk.content)
             all_tokens.append(tokens)
             for token in tokens:
                 if token not in self.vocabulary:
@@ -60,8 +124,13 @@ class SimpleVectorStore:
         
         #  IDF
         doc_count = len(self.chunks)
-        for token, token_id in self.vocabulary.items():
-            df = sum(1 for tokens in all_tokens if token in tokens)
+        token_sets = [set(tokens) for tokens in all_tokens]
+        df_counts: Dict[str, int] = {}
+        for token_set in token_sets:
+            for token in token_set:
+                df_counts[token] = df_counts.get(token, 0) + 1
+        for token in self.vocabulary:
+            df = df_counts.get(token, 0)
             self.idf[token] = np.log((doc_count + 1) / (df + 1)) + 1
         
         #  TF-IDF 
@@ -97,12 +166,7 @@ class SimpleVectorStore:
             return []
         
         # 
-        import re
-        def tokenize(text: str) -> List[str]:
-            tokens = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z]+|\d+', text.lower())
-            return tokens
-        
-        query_tokens = tokenize(query)
+        query_tokens = _tokenize(query)
         query_vector = np.zeros(len(self.vocabulary))
         
         token_count = len(query_tokens)
@@ -143,10 +207,43 @@ class SimpleVectorStore:
         
         return results
     
+    def term_coverage(self, query: str, passage: str) -> float:
+        """How much of the query's IDF mass the passage actually contains.
+
+        Cosine similarity alone cannot tell a real hit from an accidental one
+        on a small corpus: a single shared common word can lift an unrelated
+        passage above a genuinely relevant one. Coverage asks the direct
+        question instead — are the query's *distinctive* terms in this text?
+
+        Terms outside the corpus vocabulary count fully against coverage:
+        they are maximally rare and certainly absent from the passage.
+        Treating them as weightless let a query like "capital of France"
+        score a perfect 1.0 off the single word "capital".
+        """
+        # _tokenize already drops stopwords. No length filter: "stage_i" is
+        # normalized to one token, but bare numerals and short technical terms
+        # still matter, so cutting tokens by length would discard signal.
+        query_terms = set(_tokenize(query))
+        if not query_terms:
+            return 0.0
+
+        max_idf = max(self.idf.values()) if self.idf else 1.0
+        passage_terms = set(_tokenize(passage))
+
+        total = sum(self.idf.get(t, max_idf) for t in query_terms)
+        if total <= 0:
+            return 0.0
+        hit = sum(self.idf.get(t, max_idf) for t in query_terms if t in passage_terms)
+        return hit / total
+
     def _save(self):
         """"""
         data_file = self.storage_path / "chunks.json"
         metadata_file = self.storage_path / "metadata.json"
+        vectors_file = self.storage_path / "vectors.npy"
+
+        if self.vectors is not None:
+            np.save(vectors_file, self.vectors)
         
         #  chunks
         chunks_data = [chunk.to_dict() for chunk in self.chunks]
@@ -186,10 +283,26 @@ class SimpleVectorStore:
                     metadata = json.load(f)
                     self.vocabulary = metadata.get('vocabulary', {})
                     self.idf = metadata.get('idf', {})
-            
-            # 
+
+            # Reuse the cached TF-IDF matrix when it matches the corpus;
+            # only rebuild if the cache is missing or stale.
+            vectors_file = self.storage_path / "vectors.npy"
+            if (
+                vectors_file.exists()
+                and self.vocabulary
+                and self.idf
+            ):
+                try:
+                    vectors = np.load(vectors_file)
+                    if vectors.shape == (len(self.chunks), len(self.vocabulary)):
+                        self.vectors = vectors
+                        return
+                except Exception:
+                    pass
+
             if self.chunks:
                 self._rebuild_index()
+                np.save(vectors_file, self.vectors)
     
     def get_stats(self) -> Dict:
         """"""

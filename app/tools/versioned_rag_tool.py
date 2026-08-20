@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from app.config import settings
 from app.core.types import Citation, ToolResult
+from app.feedback.adaptation import source_weight_lookup
 from app.tools.base import BaseTool
 from app.tools.vector_store import SimpleVectorStore
 
@@ -98,12 +99,32 @@ class VersionedRAGTool(BaseTool):
                     return 0.5
                 return (y - min_year) / (max_year - min_year)
 
+            # Learned per-document weights from the implicit feedback loop.
+            # Neutral ({}) when the feature is off or nothing has been learned
+            # yet, so ranking behaviour is unchanged on a fresh install.
+            feedback_weights = source_weight_lookup()
+
             for row in enriched:
                 row["recency_score"] = recency_score(row["year"])
+                row["feedback_weight"] = float(feedback_weights.get(row["source"], 1.0))
+                # Recency, revision and learned weight are multiplicative
+                # tie-breakers on top of relevance, never additive terms
+                # competing with it.
+                #
+                # The previous blend was additive and unnormalized:
+                # 0.72*semantic + 0.22*recency + revision_boost. TF-IDF cosine
+                # on this corpus tops out around 0.36, so the semantic term
+                # contributed at most ~0.26 while recency+revision contributed
+                # up to 0.30 — document age outranked what the passage was
+                # actually about, and the top hit for a question often
+                # contained none of its terms.
+                #
+                # Bounded at 1.28x: a newer or revised source can outrank a
+                # semantically better one only within that margin.
                 row["final_score"] = (
-                    0.72 * row["semantic_score"]
-                    + 0.22 * row["recency_score"]
-                    + row["revision_boost"]
+                    row["semantic_score"]
+                    * (1.0 + 0.20 * row["recency_score"] + row["revision_boost"])
+                    * row["feedback_weight"]
                 )
 
             enriched.sort(key=lambda x: x["final_score"], reverse=True)
@@ -158,6 +179,12 @@ class VersionedRAGTool(BaseTool):
                             "recency_score": row["recency_score"],
                             "year": row["year"],
                             "revision_boost": row["revision_boost"],
+                            "feedback_weight": row.get("feedback_weight", 1.0),
+                            # Read by RAGAgent.assess_evidence to decide whether
+                            # this passage is worth answering from.
+                            "term_coverage": self.vector_store.term_coverage(
+                                query, row["content"]
+                            ),
                         },
                     )
                 )

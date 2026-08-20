@@ -2,16 +2,35 @@
 Planner Agent： stage +  + ，next step
 """
 from app.agents.base import BaseAgent
+from app.core.stage_model import NEXT_STAGE, STAGE_MODEL
 from app.core.types import SessionState, AgentOutput, PlanStep, PlanStepType, ToolCall
 from app.core.llm import llm_client
 
 
 class PlannerAgent(BaseAgent):
     """Planning agent"""
-    
+
     def __init__(self):
         super().__init__("PlannerAgent")
-    
+
+    @staticmethod
+    def _unmet_prerequisite(state: SessionState, stage: str) -> tuple[str, str] | None:
+        """The slot that still has to be filled before this stage's own work
+        can be called finished. Returns (step description, question to ask)."""
+        if stage == "0" and not state.slots.intervention_defined:
+            return (
+                "Clarify what the intervention will be",
+                "What intervention are you developing, and which mechanism does it target?",
+            )
+        # Manualization is Stage IA's output and Stage IB's precondition.
+        if stage in {"I", "IA"} and not state.slots.manualized:
+            return (
+                "Clarify whether the intervention is manualized",
+                "Is the intervention manualized yet — is there a written protocol or manual?",
+            )
+        return None
+
+
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
         """
         Generate execution plan
@@ -95,70 +114,62 @@ class PlannerAgent(BaseAgent):
         final_response_outline = None
         
         current_stage = state.slots.stage
-        
+
         # If stage is unknown, collect information first
         if not current_stage:
             plan_steps.append(PlanStep(
                 step_type=PlanStepType.ASK_USER,
                 description="Ask user for study details to identify stage"
             ))
-            next_question = "stage？：intervention？？"
-        
-        # If stage is known, generate stage-based plan
-        elif current_stage == "0":
-            # Stage 0: intervention
-            if not state.slots.intervention_defined:
+            next_question = (
+                "Which stage is your project in? To place it, tell me what the "
+                "intervention is and what has already been tested."
+            )
+        else:
+            # The per-stage ladder this replaced was hardcoded and had drifted
+            # off the real taxonomy (it advertised Stage III as effectiveness).
+            # Progression now comes from app/core/stage_model.NEXT_STAGE.
+            gate = self._unmet_prerequisite(state, current_stage)
+            if gate:
+                description, question = gate
                 plan_steps.append(PlanStep(
                     step_type=PlanStepType.ASK_USER,
-                    description="intervention"
+                    description=description,
                 ))
-                next_question = "intervention？"
+                next_question = question
             else:
+                # The stage definitions themselves come from STAGE_MODEL
+                # below, so the tool call is only for corpus documents.
+                # (This used to call db_tool, which has been deleted — it
+                # returned the same constants STAGE_MODEL already holds.)
+                following = NEXT_STAGE.get(current_stage)
                 plan_steps.append(PlanStep(
                     step_type=PlanStepType.CALL_TOOL,
-                    tool_name="db_tool",
-                    tool_args_schema={"query": "Stage I requirements"},
-                    description="Retrieve Stage I guidance"
+                    tool_name="versioned_rag_tool",
+                    tool_args_schema={
+                        "query": (
+                            f"Stage {following} requirements" if following
+                            else f"Stage {current_stage} next step"
+                        )
+                    },
+                    description=(
+                        f"Retrieve Stage {following} guidance" if following
+                        else "Retrieve related documents and guidance"
+                    ),
                 ))
-                final_response_outline = "introduce Stage I requirements：manualization"
-        
-        elif current_stage == "I":
-            # Stage I: mechanism
-            if not state.slots.manualized:
-                plan_steps.append(PlanStep(
-                    step_type=PlanStepType.ASK_USER,
-                    description="manualization"
-                ))
-                next_question = "interventionmanualization（manualized）？"
-            else:
-                plan_steps.append(PlanStep(
-                    step_type=PlanStepType.CALL_TOOL,
-                    tool_name="db_tool",
-                    tool_args_schema={"query": "Stage II requirements"},
-                    description="Retrieve Stage II guidance"
-                ))
-                final_response_outline = "introduce Stage II requirements：mechanismefficacy"
-        
-        elif current_stage == "II":
-            # Stage II: efficacy
-            plan_steps.append(PlanStep(
-                step_type=PlanStepType.CALL_TOOL,
-                tool_name="db_tool",
-                tool_args_schema={"query": "Stage III requirements"},
-                description="Retrieve Stage III guidance"
-            ))
-            final_response_outline = "introduce Stage III requirements：effectivenessreal-world testing"
-        
-        elif current_stage in ["III", "IV", "V"]:
-            #  stage，next steprecommendation
-            plan_steps.append(PlanStep(
-                step_type=PlanStepType.CALL_TOOL,
-                tool_name="vector_tool",
-                tool_args_schema={"query": f"Stage {current_stage} next step"},
-                description="Retrieve related documents and guidance"
-            ))
-            final_response_outline = f"Provide Stage {current_stage} next steprecommendation"
-        
+                if following:
+                    final_response_outline = (
+                        f"Summarize what remains in {STAGE_MODEL[current_stage].label}, then "
+                        f"introduce {STAGE_MODEL[following].title}: "
+                        f"{STAGE_MODEL[following].summary}"
+                    )
+                else:
+                    final_response_outline = (
+                        f"Provide next-step guidance within "
+                        f"{STAGE_MODEL[current_stage].title}"
+                    )
+
+
         # Generate tool calls
         tool_calls = []
         for step in plan_steps:

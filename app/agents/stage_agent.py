@@ -1,18 +1,29 @@
 """
 Stage Agent: classify NIH stage with optional tool-backed support.
 """
-import re
 from pathlib import Path
 
 from app.agents.base import BaseAgent
 from app.core.llm import llm_client
-from app.core.types import AgentOutput, SessionState, ToolCall
+from app.core.stage_model import (
+    CLASSIFICATION_STAGES,
+    COMPLETED_FEATURES_AT_STAGE,
+    STAGE_CLARIFY_CONFIDENCE,
+    STAGE_COMMIT_CONFIDENCE,
+    STAGE_MODEL,
+    find_stage_in_text,
+    is_definition_query,
+    normalize_stage,
+)
+from app.core.types import AgentOutput, SessionState
 
 
 class StageAgent(BaseAgent):
     """Stage classification agent."""
 
-    STAGES = ["0", "I", "II", "III", "IV", "V"]
+    # Stage I is scored as its two sub-stages: IA (generation and refinement)
+    # then IB (feasibility and pilot testing).
+    STAGES = CLASSIFICATION_STAGES
     MISSING_INFO_HINTS = [
         "Is the intervention already manualized?",
         "What are the sample size and study design (e.g., pilot vs RCT)?",
@@ -51,7 +62,7 @@ class StageAgent(BaseAgent):
         if not isinstance(raw, list):
             raw = []
         items = [str(x).strip() for x in raw if str(x).strip()]
-        if confidence < 0.75 and not items:
+        if confidence < STAGE_CLARIFY_CONFIDENCE and not items:
             items = self.MISSING_INFO_HINTS[:]
         return items[:5]
 
@@ -66,12 +77,7 @@ class StageAgent(BaseAgent):
         )
 
     def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
-        message_lower = user_message.lower()
-        is_stage_definition_query = (
-            any(kw in message_lower for kw in ["what is", "what's", "define", "how many stages", "number of stages", "list stages", "explain"])
-            and any(kw in message_lower for kw in ["nih stage model", "nih stage", "stage model"])
-        )
-        if is_stage_definition_query:
+        if is_definition_query(user_message):
             return AgentOutput(
                 decision={
                     "stage": None,
@@ -104,11 +110,11 @@ class StageAgent(BaseAgent):
         if not data:
             return None
 
-        stage = data.get("stage")
-        if stage is not None:
-            stage = str(stage).upper()
-            if stage not in self.STAGES:
-                stage = None
+        # normalize_stage accepts "II", "2", "Stage 2", "IA", "1b". The old
+        # `str(stage).upper() in STAGES` test dropped every one of those to
+        # None, including the sub-stages stage.md asks the model to reason
+        # about.
+        stage = normalize_stage(data.get("stage"))
 
         confidence = float(data.get("confidence", data.get("stage_confidence", 0.5)))
         confidence = max(0.0, min(1.0, confidence))
@@ -122,19 +128,16 @@ class StageAgent(BaseAgent):
         clarifying_question = data.get("clarifying_question")
         if clarifying_question is not None:
             clarifying_question = str(clarifying_question).strip() or None
-        if confidence < 0.75 and not clarifying_question:
+        if confidence < STAGE_CLARIFY_CONFIDENCE and not clarifying_question:
             clarifying_question = self._build_clarifying_question(missing_info)
 
-        tool_calls = []
-        if confidence < 0.58:
-            tool_calls.append(
-                ToolCall(
-                    tool_name="db_tool",
-                    tool_args={"query": f"Classify research stage: {user_message}"},
-                    success_criteria="Return matching stage definition",
-                )
-            )
-
+        # No tool call on low confidence. This used to emit a db_tool lookup
+        # for a stage definition, which (a) the orchestrator never executed —
+        # _stage_reason drops actions and _rag_plan overwrites the pending
+        # list — and (b) would only have returned the definitions that are
+        # already in this agent's own system prompt and in
+        # app/core/stage_model.py. Low confidence is reported through
+        # missing_info and the clarifying question instead.
         return AgentOutput(
             decision={
                 "stage": stage,
@@ -145,7 +148,7 @@ class StageAgent(BaseAgent):
             },
             confidence=confidence,
             analysis=f"LLM stage={stage}, confidence={confidence:.2f}",
-            actions=tool_calls,
+            actions=[],
         )
 
     def _run_with_rules(self, user_message: str) -> AgentOutput:
@@ -156,26 +159,17 @@ class StageAgent(BaseAgent):
         feature_updates = {}
         matched_signals = []
 
-        explicit_match = re.search(r"stage\s*(0|i{1,3}|iv|v)\b", message_lower, flags=re.IGNORECASE)
-        if explicit_match:
-            token = explicit_match.group(1).upper()
-            if token in self.STAGES:
-                stage = token
-                confidence = 0.9
-                matched_signals.append(f"Explicit stage mention: {token}")
+        explicit = find_stage_in_text(user_message)
+        if explicit:
+            stage = explicit
+            confidence = 0.9
+            matched_signals.append(f"Explicit stage mention: {explicit}")
 
         if not stage:
             stage_scores = {s: 0 for s in self.STAGES}
-            keyword_map = {
-                "0": ["basic research", "mechanism", "hypothesis", "preliminary", "predictor"],
-                "I": ["feasibility", "pilot", "small sample", "manualization", "usability", "acceptability"],
-                "II": ["efficacy", "randomized", "rct", "control", "mechanism tested"],
-                "III": ["effectiveness", "real world", "diverse", "pragmatic"],
-                "IV": ["implementation", "dissemination", "scale", "adoption"],
-                "V": ["sustainability", "maintenance", "long term"],
-            }
 
-            for stage_key, keywords in keyword_map.items():
+            for stage_key in self.STAGES:
+                keywords = STAGE_MODEL[stage_key].keywords
                 hits = [kw for kw in keywords if kw in message_lower]
                 stage_scores[stage_key] = len(hits)
                 if hits:
@@ -188,30 +182,10 @@ class StageAgent(BaseAgent):
             if best_score > 0:
                 margin = best_score - second_score
                 confidence = min(0.85, 0.55 + 0.1 * best_score + 0.05 * margin)
-                stage = best_stage if confidence >= 0.58 else None
+                stage = best_stage if confidence >= STAGE_COMMIT_CONFIDENCE else None
 
-        if stage and confidence >= 0.58:
-            if stage in {"I", "II", "III", "IV", "V"}:
-                feature_updates["intervention_defined"] = True
-                feature_updates["manualized"] = True
-            if stage in {"II", "III", "IV", "V"}:
-                feature_updates["mechanism_tested"] = True
-            if stage in {"III", "IV", "V"}:
-                feature_updates["efficacy_tested"] = True
-            if stage in {"IV", "V"}:
-                feature_updates["effectiveness_tested"] = True
-            if stage == "V":
-                feature_updates["implementation_tested"] = True
-
-        tool_calls = []
-        if confidence < 0.58:
-            tool_calls.append(
-                ToolCall(
-                    tool_name="db_tool",
-                    tool_args={"query": f"Classify research stage: {user_message}"},
-                    success_criteria="Return matching stage definition",
-                )
-            )
+        if stage and confidence >= STAGE_COMMIT_CONFIDENCE:
+            feature_updates.update(COMPLETED_FEATURES_AT_STAGE.get(stage, {}))
 
         reasoning_summary = (
             f"Matched signals: {'; '.join(matched_signals[:4])}. Current confidence={confidence:.2f}."
@@ -220,8 +194,8 @@ class StageAgent(BaseAgent):
         )
 
         clarifying_question = None
-        missing_info = self.MISSING_INFO_HINTS[:] if confidence < 0.75 else []
-        if confidence < 0.75:
+        missing_info = self.MISSING_INFO_HINTS[:] if confidence < STAGE_CLARIFY_CONFIDENCE else []
+        if confidence < STAGE_CLARIFY_CONFIDENCE:
             clarifying_question = self._build_clarifying_question(missing_info)
 
         return AgentOutput(
@@ -235,14 +209,14 @@ class StageAgent(BaseAgent):
             },
             confidence=confidence,
             analysis=f"Rule stage={stage}, confidence={confidence:.2f}",
-            actions=tool_calls,
+            actions=[],
         )
 
     def update_state(self, state: SessionState, output: AgentOutput):
         if (
             "stage" in output.decision
             and output.decision["stage"]
-            and output.confidence >= 0.58
+            and output.confidence >= STAGE_COMMIT_CONFIDENCE
         ):
             state.slots.stage = output.decision["stage"]
             state.slots.stage_confidence = output.confidence

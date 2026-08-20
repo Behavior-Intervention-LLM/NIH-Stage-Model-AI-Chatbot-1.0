@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -21,7 +20,9 @@ wheels/
 .installed.cfg
 *.egg
 
+
 # Virtual Environment
+.venv
 venv/
 env/
 ENV/
@@ -44,6 +45,7 @@ NIH_LLM/
 # Logs
 *.log
 logs/
+log.md
 
 # OS
 .DS_Store
@@ -52,3 +54,20 @@ Thumbs.db
 # env
 qdrant.env
 *.env
+
+# Local runtime storage
+local_storage/
+
+# User credentials database — never commit
+users.db
+
+# Stray local SQLite file (accidental duplicate of users.db schema)
+/db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+notebook/
+
+TODO.md
+# Derived TF-IDF matrix cache (rebuilt automatically from chunks.json)
+data/vector_store/vectors.npy
