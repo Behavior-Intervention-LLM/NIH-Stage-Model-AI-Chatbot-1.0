@@ -26,35 +26,47 @@ class LLMClient:
     def is_enabled(self) -> bool:
         return self.provider in {"ollama", "anthropic", "openai", "groq"}
 
-    def chat_text(self, system_prompt: str, user_prompt: str, model: Optional[str] = None) -> Optional[str]:
+    def chat_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Optional[str]:
         if not self.is_enabled():
             return None
 
         if self.provider == "ollama":
-            return self._call_ollama(system_prompt, user_prompt)
+            return self._call_ollama(system_prompt, user_prompt, max_tokens=max_tokens)
         if self.provider == "anthropic":
-            return self._call_anthropic(system_prompt, user_prompt)
+            return self._call_anthropic(system_prompt, user_prompt, max_tokens=max_tokens)
         if self.provider == "openai":
-            return self._call_openai(system_prompt, user_prompt, model=model)
+            return self._call_openai(system_prompt, user_prompt, model=model, max_tokens=max_tokens)
         if self.provider == "groq":
-            return self._call_groq(system_prompt, user_prompt)
+            return self._call_groq(system_prompt, user_prompt, max_tokens=max_tokens)
 
         return None
 
     def chat_text_stream(
-        self, system_prompt: str, user_prompt: str, model: Optional[str] = None
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
         """Yield response text incrementally. Falls back to a single chunk for
         providers without streaming support here."""
         if self.provider == "openai" and self.is_enabled():
-            stream = self._openai_completion(system_prompt, user_prompt, model=model, stream=True)
+            stream = self._openai_completion(
+                system_prompt, user_prompt, model=model, stream=True, max_tokens=max_tokens
+            )
             for chunk in stream:
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 if delta:
                     yield delta
             return
 
-        text = self.chat_text(system_prompt, user_prompt, model=model)
+        text = self.chat_text(system_prompt, user_prompt, model=model, max_tokens=max_tokens)
         if text:
             yield text
 
@@ -68,7 +80,12 @@ class LLMClient:
         return self._openai_client
 
     def _openai_completion(
-        self, system_prompt: str, user_prompt: str, model: Optional[str] = None, stream: bool = False
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: Optional[str] = None,
+        stream: bool = False,
+        max_tokens: Optional[int] = None,
     ):
         from openai import BadRequestError
 
@@ -76,7 +93,7 @@ class LLMClient:
         target_model = model or self.model
         kwargs: Dict[str, Any] = {
             "model": target_model,
-            "max_completion_tokens": settings.LLM_MAX_TOKENS,
+            "max_completion_tokens": max_tokens or settings.LLM_MAX_TOKENS,
             "stream": stream,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -94,11 +111,19 @@ class LLMClient:
                 return client.chat.completions.create(**kwargs)
             raise
 
-    def _call_openai(self, system_prompt: str, user_prompt: str, model: Optional[str] = None) -> Optional[str]:
-        response = self._openai_completion(system_prompt, user_prompt, model=model)
+    def _call_openai(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Optional[str]:
+        response = self._openai_completion(system_prompt, user_prompt, model=model, max_tokens=max_tokens)
         return (response.choices[0].message.content or "").strip()
 
-    def _call_ollama(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def _call_ollama(
+        self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None
+    ) -> Optional[str]:
         base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         payload = {
             "model": self.model,
@@ -107,7 +132,10 @@ class LLMClient:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "options": {"temperature": settings.LLM_TEMPERATURE},
+            "options": {
+                "temperature": settings.LLM_TEMPERATURE,
+                "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
+            },
         }
         response = requests.post(
             f"{base_url}/api/chat",
@@ -117,7 +145,9 @@ class LLMClient:
         response.raise_for_status()
         return response.json().get("message", {}).get("content", "").strip()
 
-    def _call_anthropic(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def _call_anthropic(
+        self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None
+    ) -> Optional[str]:
         api_key = settings.ANTHROPIC_API_KEY or settings.LLM_API_KEY
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY is not set.")
@@ -125,7 +155,7 @@ class LLMClient:
         model = settings.ANTHROPIC_MODEL
         payload = {
             "model": model,
-            "max_tokens": settings.LLM_MAX_TOKENS,
+            "max_tokens": max_tokens or settings.LLM_MAX_TOKENS,
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
         }
@@ -143,7 +173,9 @@ class LLMClient:
         data = response.json()
         return data.get("content", [{}])[0].get("text", "").strip()
 
-    def _call_groq(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def _call_groq(
+        self, system_prompt: str, user_prompt: str, max_tokens: Optional[int] = None
+    ) -> Optional[str]:
         api_key = settings.GROQ_API_KEY
         if not api_key:
             raise ValueError("GROQ_API_KEY is not set.")
@@ -151,7 +183,7 @@ class LLMClient:
         payload = {
             "model": settings.GROQ_MODEL,
             "temperature": settings.LLM_TEMPERATURE,
-            "max_tokens": settings.LLM_MAX_TOKENS,
+            "max_tokens": max_tokens or settings.LLM_MAX_TOKENS,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

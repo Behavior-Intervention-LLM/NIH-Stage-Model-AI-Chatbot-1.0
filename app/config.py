@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: Optional[str] = os.getenv("LLM_API_KEY")
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 2000
+    # Output cap for composition turns (essays, summaries, reports);
+    # LLM_MAX_TOKENS is sized for conversational answers and truncates them.
+    LLM_COMPOSE_MAX_TOKENS: int = int(os.getenv("LLM_COMPOSE_MAX_TOKENS", "4000"))
     # Fast/cheap model for routing-style calls (intent classification).
     # Falls back to LLM_MODEL when unset. OpenAI provider only.
     # Must be a non-reasoning model — reasoning models (gpt-5* family) spend

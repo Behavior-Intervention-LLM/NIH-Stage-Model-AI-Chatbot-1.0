@@ -194,6 +194,18 @@ class Orchestrator:
         # continuity lives in messages/summary, which is where it belongs.
         state.artifacts.clear()
 
+        # Stage clarification fields are likewise per-turn: a stale
+        # clarifying question or missing-info list kept resurfacing in the
+        # responder prompt on later turns, which re-asked stage questions
+        # instead of answering the current request. The committed stage
+        # itself (slots.stage / stage_confidence) persists so later turns can
+        # refer to it; its reasoning summary survives with it, but not a
+        # summary left over from a failed classification.
+        for key in ("missing_info", "clarifying_question", "stage_uncertain_hint"):
+            state.slots.extracted_features.pop(key, None)
+        if not state.slots.stage:
+            state.slots.extracted_features.pop("reasoning_summary", None)
+
         # Attachments persist for the session so follow-up questions can refer
         # back to them. They are held on the state object, NOT appended to the
         # user message: prepending meant the document was re-sent to the intent
@@ -616,9 +628,13 @@ class Orchestrator:
         user_message = gstate["user_message"]
         context = gstate["context"]
 
-        # Low stage confidence is passed to ResponderAgent; the LLM decides tone and follow-ups.
+        # Low stage confidence is passed to ResponderAgent; the LLM decides
+        # tone and follow-ups. Only when stage classification actually ran
+        # this turn — a skipped stage agent (definition, compose, chit-chat)
+        # must not make the responder ask stage questions.
         if (
-            self._as_bool(gstate.get("intent_need_stage"), default=False)
+            "stage_agent" in gstate.get("called_agents", [])
+            and self._as_bool(gstate.get("intent_need_stage"), default=False)
             and not self._as_bool(gstate.get("intent_is_definition"), default=False)
             and (
                 gstate.get("stage_result") is None

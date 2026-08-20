@@ -7,7 +7,7 @@ from typing import Literal
 from app.agents.base import BaseAgent
 from app.config import settings
 from app.core.llm import llm_client
-from app.core.stage_model import is_definition_query
+from app.core.stage_model import is_compose_query, is_definition_query
 from app.core.types import AgentOutput, SessionState
 
 
@@ -74,7 +74,8 @@ class IntentAgent(BaseAgent):
             "- workflow (navigator/mechanism_coach/study_builder/measure_finder/grant_partner)\n"
             "- need_stage (bool)\n"
             "- intent_label (stage_guidance/general_qa/chit_chat/admin/debug/unknown)\n"
-            "- query_type (definition/stage_classification/stage_requirements/next_step/general_qa/chit_chat/admin)\n"
+            "- query_type (definition/stage_classification/stage_requirements/next_step/compose/general_qa/chit_chat/admin)\n"
+            "  compose = the user asks you to produce a piece of writing (essay, summary, report)\n"
             "- language (zh/en)\n"
             "- is_definition_query (bool)\n"
             "- confidence (0~1)\n"
@@ -117,6 +118,7 @@ class IntentAgent(BaseAgent):
             "stage_classification",
             "stage_requirements",
             "next_step",
+            "compose",
             "general_qa",
             "chit_chat",
             "admin",
@@ -135,8 +137,18 @@ class IntentAgent(BaseAgent):
             need_stage = True
         if query_type == "definition" or is_definition:
             need_stage = False
-        if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and query_type not in {"definition", "chit_chat", "admin"}:
+        if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and query_type not in {"definition", "compose", "chit_chat", "admin"}:
             need_stage = True
+        # A composition request ("write an essay on it") mentions stage terms,
+        # so the corrections above would drag it back into the stage flow. It
+        # is a generation task: answer from the already-committed stage in
+        # session state instead of re-classifying and asking for study details.
+        if query_type == "compose" or (
+            is_compose_query(user_message) and query_type not in {"chit_chat", "admin"}
+        ):
+            query_type = "compose"
+            need_stage = False
+            is_definition = False
 
         user_goal = data.get("user_goal")
         if user_goal is not None:
@@ -216,8 +228,11 @@ class IntentAgent(BaseAgent):
         # Shared with StageAgent and ResponderAgent, which used to carry their
         # own slightly different keyword lists for the same question.
         is_definition = is_definition_query(user_message)
+        is_compose = is_compose_query(user_message)
 
-        if self._any(message_lower, ["next step", "what should", "how to proceed", "recommendation"]):
+        if is_compose:
+            query_type = "compose"
+        elif self._any(message_lower, ["next step", "what should", "how to proceed", "recommendation"]):
             query_type = "next_step"
         elif self._any(message_lower, ["requirement", "requirements", "criteria"]):
             query_type = "stage_requirements"
@@ -241,6 +256,13 @@ class IntentAgent(BaseAgent):
             confidence = 0.85
             query_type = "chit_chat"
             workflow = "navigator"
+        elif is_compose:
+            # Checked before the stage-keyword branch: "write an essay about
+            # my stage" hits the stage keywords but is a generation task, not
+            # a request to be (re-)classified.
+            intent_label = "general_qa"
+            need_stage = False
+            confidence = 0.8
         elif is_definition:
             intent_label = "general_qa"
             need_stage = False
@@ -257,7 +279,7 @@ class IntentAgent(BaseAgent):
             intent_label = "general_qa"
             confidence = 0.55
 
-        if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and query_type not in {"definition", "chit_chat", "admin"}:
+        if workflow in {"mechanism_coach", "study_builder", "measure_finder", "grant_partner"} and query_type not in {"definition", "compose", "chit_chat", "admin"}:
             need_stage = True
 
         extracted_signals = []

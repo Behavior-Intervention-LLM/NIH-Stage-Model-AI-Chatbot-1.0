@@ -61,7 +61,11 @@ class Guardrails:
     
     # Arbitrary numbers?
     MAX_MESSAGE_LENGTH = 5000
-    MAX_RESPONSE_LENGTH = 2000
+    # Safety net for pathological output only. Must sit well above what the
+    # LLM token caps already allow (LLM_COMPOSE_MAX_TOKENS = 4000 tokens ≈
+    # 16-20k chars): at 2000 it was chopping every essay-length answer
+    # mid-word even though the model was explicitly asked to write one.
+    MAX_RESPONSE_LENGTH = 24000
     FORBIDDEN_PATTERNS = [
         r"<script",
         r"javascript:",

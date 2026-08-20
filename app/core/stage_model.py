@@ -345,6 +345,19 @@ _DEFINITION_VERBS = (
 )
 _DEFINITION_SUBJECTS = ("nih stage model", "nih stage", "stage model")
 
+# A composition request pairs a producing verb with a named deliverable
+# ("write an essay", "draft a summary"). The verb alone is not enough: "how
+# do I write my grant" is a question about writing, not a request to write.
+_COMPOSE_VERBS = (
+    "write", "compose", "draft", "rewrite", "paraphrase",
+    "summarize", "summarise", "put together", "turn this into",
+)
+_COMPOSE_DELIVERABLES = (
+    "essay", "summary", "report", "paragraph", "paragraphs", "abstract",
+    "overview", "write-up", "writeup", "narrative", "outline",
+)
+_COMPOSE_PHRASES = ("write about", "write on it", "write up", "write something")
+
 
 def _has_phrase(text: str, phrase: str) -> bool:
     return re.search(rf"\b{re.escape(phrase)}\b", text) is not None
@@ -356,6 +369,20 @@ def is_definition_query(user_message: str) -> bool:
     lowered = (user_message or "").lower()
     return any(_has_phrase(lowered, v) for v in _DEFINITION_VERBS) and any(
         _has_phrase(lowered, s) for s in _DEFINITION_SUBJECTS
+    )
+
+
+def is_compose_query(user_message: str) -> bool:
+    """True when the user is asking the assistant to produce a piece of
+    writing (essay, summary, report) rather than asking a question. Such a
+    turn should be answered from what is already known — including the
+    committed stage in session state — not re-routed into stage
+    classification, whose clarifying questions would displace the deliverable."""
+    lowered = (user_message or "").lower()
+    if any(_has_phrase(lowered, p) for p in _COMPOSE_PHRASES):
+        return True
+    return any(_has_phrase(lowered, v) for v in _COMPOSE_VERBS) and any(
+        _has_phrase(lowered, d) for d in _COMPOSE_DELIVERABLES
     )
 
 

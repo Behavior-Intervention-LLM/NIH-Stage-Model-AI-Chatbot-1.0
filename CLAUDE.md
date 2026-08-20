@@ -72,9 +72,17 @@ load_state → intent → [route by intent]
 ```
 
 **Key routing rules:**
-- After `intent`: routes to `stage_reason` (stage/workflow questions) or `rag_plan` (general Q&A). Definition queries and chit_chat/admin skip the stage agent.
+- After `intent`: routes to `stage_reason` (stage/workflow questions) or `rag_plan` (general Q&A). Definition queries, compose queries, and chit_chat/admin skip the stage agent.
+- Compose queries (`query_type: "compose"`, detected by `is_compose_query()` in `stage_model.py` — "write an essay/summary/report…") are generation tasks: they never re-run stage classification, and the responder gets a task instruction (`user_instruction_compose` in `responder.md`) to produce the full deliverable using the already-committed `slots.stage`, with the larger `LLM_COMPOSE_MAX_TOKENS` output cap.
 - After `assess_evidence`: if the retrieved passages clear neither relevance floor and the attempt budget (`RAG_MAX_ATTEMPTS`, default 2) is not spent, loop back to `rag_plan`, which reformulates the query — via the cheap LLM, falling back to a deterministic keyword rewrite. Otherwise continue to `responder`.
 - Low stage confidence (< 0.75) sets `stage_uncertain_hint`; the responder decides tone and follow-ups. There is no separate clarify gate.
+
+**Per-turn state:** `_load_state` clears the per-turn stage clarification
+fields (`missing_info`, `clarifying_question`, `stage_uncertain_hint`) so a
+stale clarifying question cannot resurface on later turns; the committed
+`slots.stage`/`stage_confidence` persist for the session, and
+`reasoning_summary` persists only while a stage is committed. The
+`stage_uncertain_hint` is only set on turns where the stage agent actually ran.
 
 **Evidence handling:** `state.artifacts` holds only the *current* turn's tool
 observations — `_load_state` clears it. When the final verdict is

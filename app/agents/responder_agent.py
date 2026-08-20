@@ -13,6 +13,7 @@ from app.core.stage_model import (
     STAGES,
     SUBSTAGES,
     find_stage_in_text,
+    is_compose_query,
     is_definition_query,
     stage_summary_lines,
 )
@@ -46,6 +47,15 @@ class ResponderAgent(BaseAgent):
         
         "user_instruction_definition": (
             "Provide: (1) number of stages, (2) stage names, and (3) one-line description per stage."
+        ),
+
+        "user_instruction_compose": (
+            "The user asked you to produce a piece of writing. Your reply IS the "
+            "deliverable: write the complete essay/summary/report now, in fluent "
+            "prose, at the length the task needs. Do not re-classify their stage, "
+            "do not ask clarifying questions first, and do not describe what the "
+            "piece would contain — write it. If a stage has been detected (see "
+            "'Inferred stage' in the context), use it and refer to it in the piece."
         ),
     }
 
@@ -243,14 +253,20 @@ class ResponderAgent(BaseAgent):
 
     def _build_llm_prompts(
         self, state: SessionState, user_message: str, context: str = ""
-    ) -> tuple[str, str, List]:
-        """Build (system_prompt, user_prompt, citations) for the final response."""
+    ) -> tuple[str, str, List, int | None]:
+        """Build (system_prompt, user_prompt, citations, max_tokens) for the
+        final response. max_tokens is None except on composition turns, which
+        need more room than the conversational default."""
         evidence_lines, evidence_sources, citations = self._collect_evidence(state)
 
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_query_type = str(intent_payload.get("query_type", "")).lower()
 
-        is_stage_definition_query = (
+        # Compose wins over definition: "write an essay explaining the NIH
+        # stage model" is a deliverable request, not a request for the
+        # three-line definition format.
+        is_compose = intent_query_type == "compose" or is_compose_query(user_message)
+        is_stage_definition_query = not is_compose and (
             is_definition_query(user_message) or intent_query_type == "definition"
         )
 
@@ -260,10 +276,19 @@ class ResponderAgent(BaseAgent):
             state, user_message, context, evidence_lines, evidence_sources
         )
 
-        if is_stage_definition_query:
+        max_tokens: int | None = None
+        user_tail: str | None = None
+        if is_compose:
+            user_tail = sections.get("user_instruction_compose") or self._FALLBACK_SECTIONS[
+                "user_instruction_compose"
+            ]
+            max_tokens = settings.LLM_COMPOSE_MAX_TOKENS
+        elif is_stage_definition_query:
             user_tail = sections.get("user_instruction_definition") or self._FALLBACK_SECTIONS[
                 "user_instruction_definition"
             ]
+
+        if user_tail:
             user_prompt = (
                 f"{base_context}\n\n"
                 f"--- TASK INSTRUCTION ---\n"
@@ -272,14 +297,18 @@ class ResponderAgent(BaseAgent):
         else:
             user_prompt = base_context
 
-        return system_prompt, user_prompt, citations
+        return system_prompt, user_prompt, citations, max_tokens
 
     def _run_with_llm(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput | None:
         if not llm_client.is_enabled():
             return None
 
-        system_prompt, user_prompt, citations = self._build_llm_prompts(state, user_message, context)
-        text = llm_client.chat_text(system_prompt=system_prompt, user_prompt=user_prompt)
+        system_prompt, user_prompt, citations, max_tokens = self._build_llm_prompts(
+            state, user_message, context
+        )
+        text = llm_client.chat_text(
+            system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=max_tokens
+        )
 
         if not text:
             return None
@@ -301,9 +330,13 @@ class ResponderAgent(BaseAgent):
                 on_chunk(out.user_facing)
             return out
 
-        system_prompt, user_prompt, citations = self._build_llm_prompts(state, user_message, context)
+        system_prompt, user_prompt, citations, max_tokens = self._build_llm_prompts(
+            state, user_message, context
+        )
         parts: List[str] = []
-        for chunk in llm_client.chat_text_stream(system_prompt=system_prompt, user_prompt=user_prompt):
+        for chunk in llm_client.chat_text_stream(
+            system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=max_tokens
+        ):
             parts.append(chunk)
             on_chunk(chunk)
         text = "".join(parts).strip()
