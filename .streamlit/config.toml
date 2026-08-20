@@ -8,7 +8,15 @@ enableXsrfProtection = true
 gatherUsageStats = false
 
 [theme]
-primaryColor = "#1f4e79"
+# BID brand teal. #00a79d is also the value frontend_streamlit.py tints Material
+# icons with (BID_TEAL), kept identical so the config-driven chrome and the
+# CSS-driven icons match.
+# primaryColor drives filled buttons, focus rings, the selected radio/checkbox,
+# sliders, spinners, tab underlines and the chat-input border.
+primaryColor = "#00a79d"
+# Links are body-size text, so they need 4.5:1 against white; the brand teal
+# only reaches 2.99:1. This is the same hue darkened to 5.21:1.
+linkColor = "#007a73"
 backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f0f2f6"
 textColor = "#262730"

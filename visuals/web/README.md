@@ -65,8 +65,8 @@ container and stamps the icon on each child widget's label too.
 
 The sidebar nav, New Chat / Delete Current Chat, System Status, and the
 "In development" card captions use Streamlit's built-in Material icons
-(`:material/forum:`, `:material/add:`, ...) tinted to `BID_TEAL` (`#13a89e`,
-sampled from the icon artwork) so they sit with the PNG set. Swapping any of
+(`:material/forum:`, `:material/add:`, ...) tinted to `BID_TEAL` (`#00a79d`,
+the BID brand teal) so they sit with the PNG set. Swapping any of
 them for a real PNG later is a one-line change.
 
 Note the two different DOM shapes: an `icon=` widget parameter renders as
