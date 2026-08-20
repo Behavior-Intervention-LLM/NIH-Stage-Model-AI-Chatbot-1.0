@@ -41,7 +41,12 @@ ICON_ABOUT = os.path.join(_VISUALS, "icon_about.png")
 ICON_CHANGE_PASSWORD = os.path.join(_VISUALS, "icon_change_password.png")
 ICON_LOG_OUT = os.path.join(_VISUALS, "icon_log_out.png")
 ICON_QUESTION = os.path.join(_VISUALS, "icon_question.png")
-BID_TEAL = "#13a89e"  # sampled from the icon artwork
+BID_TEAL = "#00a79d"  # BID brand teal
+# The brand teal only reaches 2.99:1 against white, so anything that carries a
+# white label on a filled teal surface (primary buttons) uses this darkened
+# same-hue variant instead, which clears 4.5:1.
+BID_TEAL_DEEP = "#007a73"
+BID_TEAL_HOVER = "#00615c"  # one step darker again, for the pressed/hover state
 
 
 def _art(path, fallback=None):
@@ -159,6 +164,53 @@ st.markdown(
       /* ... while :material/x: inside markdown renders as a plain span[role=img]. */
       .st-key-page_nav [data-testid="stRadioOption"] span[role="img"],
       [data-testid="stCaptionContainer"] span[role="img"] {{
+          color: {BID_TEAL};
+      }}
+
+      /* Filled primary buttons -- Login, Create Account, the active workflow
+         card, the active thumb -- put a white label on primaryColor. At the
+         exact brand teal that is only 2.95:1, so the filled surface alone is
+         darkened; every outline/accent use of the teal keeps the brand value. */
+      [data-testid="stBaseButton-primary"],
+      [data-testid="stBaseButton-primaryFormSubmit"] {{
+          background-color: {BID_TEAL_DEEP};
+          border-color: {BID_TEAL_DEEP};
+          color: #ffffff;
+      }}
+      [data-testid="stBaseButton-primary"]:hover,
+      [data-testid="stBaseButton-primaryFormSubmit"]:hover,
+      [data-testid="stBaseButton-primary"]:focus:not(:active),
+      [data-testid="stBaseButton-primaryFormSubmit"]:focus:not(:active) {{
+          background-color: {BID_TEAL_HOVER};
+          border-color: {BID_TEAL_HOVER};
+          color: #ffffff;
+      }}
+
+      /* Streamlit tints a secondary button's label and border to primaryColor
+         on hover/focus. Left at the brand teal the label drops to 2.95:1, so
+         these get the darkened teal too -- the resting state is unchanged. */
+      [data-testid="stBaseButton-secondary"]:hover,
+      [data-testid="stBaseButton-secondaryFormSubmit"]:hover,
+      [data-testid="stBaseButton-secondary"]:focus:not(:active),
+      [data-testid="stBaseButton-secondaryFormSubmit"]:focus:not(:active) {{
+          border-color: {BID_TEAL_DEEP};
+          color: {BID_TEAL_DEEP};
+      }}
+
+      /* The chat send button is the same shape of problem as a primary button
+         -- a white glyph on a filled primaryColor circle -- so it takes the
+         darkened teal too. It only enables once there is text to send. */
+      [data-testid="stChatInputSubmitButton"]:not(:disabled) {{
+          background-color: {BID_TEAL_DEEP};
+          color: #ffffff;
+      }}
+      [data-testid="stChatInputSubmitButton"]:not(:disabled):hover {{
+          background-color: {BID_TEAL_HOVER};
+      }}
+
+      /* The file uploader's Upload button sits in the main area, outside the
+         sidebar scope of the tint rule above, so its icon needs naming. */
+      [data-testid="stFileUploader"] [data-testid="stIconMaterial"] {{
           color: {BID_TEAL};
       }}
     """
