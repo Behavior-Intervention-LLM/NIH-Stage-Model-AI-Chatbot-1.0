@@ -17,6 +17,11 @@ from app.agents.rag_agent import RAGAgent
 from app.agents.responder_agent import ResponderAgent
 from app.agents.stage_agent import StageAgent
 # from app.agents.study_builder_agent import StudyBuilderAgent
+from app.core.followup import (
+    extract_pending_offer,
+    is_short_acknowledgement,
+    resolve_accepted_offer,
+)
 from app.core.memory import memory_manager
 from app.core.state_store import state_store
 from app.config import settings
@@ -48,6 +53,9 @@ class ChatGraphState(TypedDict, total=False):
     intent_confidence: float
     intent_is_definition: bool
     intent_workflow: str
+    # Offer the previous assistant turn made and this turn's message accepted
+    # ("Yes please!", "2 please"); None on every other turn.
+    accepted_offer: Optional[str]
     stage_result: Optional[str]
     stage_confidence: float
 
@@ -206,6 +214,16 @@ class Orchestrator:
         if not state.slots.stage:
             state.slots.extracted_features.pop("reasoning_summary", None)
 
+        # A pending offer ("Would you like me to write it for you?") lives for
+        # exactly one turn: pop it, and only if THIS message accepts it
+        # ("Yes please!", "2 please") does it survive as accepted_offer for
+        # the responder to fulfil.
+        pending_offer = state.slots.extracted_features.pop("pending_offer", None)
+        state.slots.extracted_features.pop("accepted_offer", None)
+        accepted_offer = resolve_accepted_offer(pending_offer, user_message)
+        if accepted_offer:
+            state.slots.extracted_features["accepted_offer"] = accepted_offer
+
         # Attachments persist for the session so follow-up questions can refer
         # back to them. They are held on the state object, NOT appended to the
         # user message: prepending meant the document was re-sent to the intent
@@ -231,6 +249,7 @@ class Orchestrator:
             "state": state,
             "user_message": user_message,
             "context": context,
+            "accepted_offer": accepted_offer,
             "pending_tool_calls": [],
             "called_agents": [],
             "react_last_planned_tools": 0,
@@ -248,6 +267,7 @@ class Orchestrator:
                     {"name": a.name, "chars": a.chars} for a in state.attachments
                 ],
                 "attachments_added_this_turn": added_now,
+                "accepted_offer": accepted_offer,
             },
         }
 
@@ -256,9 +276,44 @@ class Orchestrator:
         user_message = gstate["user_message"]
         context = gstate["context"]
 
-        out = self.agents["intent_agent"].run(state, user_message, context)
-        decision = out.decision or {}
-        out.decision = decision
+        accepted_offer = gstate.get("accepted_offer")
+        if accepted_offer:
+            # The user accepted an offer the assistant made last turn. There
+            # is nothing to classify: the task is to fulfil the offer, which
+            # is a generation turn — skip the intent LLM and never re-enter
+            # stage classification (that is exactly the failure users hit:
+            # "Yes please!" answered with a restated stage).
+            decision = {
+                "workflow": state.slots.extracted_features.get("workflow", "navigator"),
+                "need_stage": False,
+                "intent_label": "general_qa",
+                "query_type": "compose",
+                "language": IntentAgent._detect_language(user_message),
+                "is_definition_query": False,
+                "user_goal": "Fulfil the offer the assistant made last turn",
+                "extracted_signals": ["accepted_pending_offer"],
+                "missing_info": [],
+                "clarifying_question": None,
+            }
+            out = AgentOutput(
+                decision=decision,
+                confidence=0.95,
+                analysis="User accepted the pending offer; routed to compose without re-classification",
+            )
+        else:
+            out = self.agents["intent_agent"].run(state, user_message, context)
+            decision = out.decision or {}
+            out.decision = decision
+            # Guard: a bare acknowledgement ("sure", "ok", "1") answers the
+            # assistant's previous turn — even when no pending offer was
+            # captured, it is never a request to be (re-)classified.
+            if is_short_acknowledgement(user_message):
+                decision["need_stage"] = False
+                if decision.get("query_type") in {
+                    "stage_classification", "stage_requirements", "next_step",
+                }:
+                    decision["query_type"] = "general_qa"
+                gstate["debug_info"]["short_ack_stage_guard"] = True
 
         self.agents["intent_agent"].update_state(state, out)
         self._add_agent(gstate, "intent_agent", out)
@@ -704,6 +759,14 @@ class Orchestrator:
         state = gstate["state"]
         reply = gstate["reply"]
         state.add_message(MessageRole.ASSISTANT, reply)
+
+        # If this reply ends with an offer, remember it for one turn so a
+        # bare "Yes please!" next turn is treated as accepting it.
+        pending_offer = extract_pending_offer(reply)
+        if pending_offer:
+            state.slots.extracted_features["pending_offer"] = pending_offer
+        else:
+            state.slots.extracted_features.pop("pending_offer", None)
 
         if memory_manager.should_summarize(state):
             summary = memory_manager.create_summary(state)

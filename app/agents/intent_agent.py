@@ -84,9 +84,13 @@ class IntentAgent(BaseAgent):
             "- missing_info (list[string])\n"
             "- clarifying_question (string|null)"
         )
+        # Keep the TAIL of the context: the string ends with the recent
+        # conversation, and the last assistant turn is what a short reply
+        # like "Yes please!" refers to. A head slice kept only the summary
+        # and slot dump, so acceptances were classified as stage questions.
         user_prompt = (
             f"user_message: {user_message}\n"
-            f"context: {context[:1200]}\n"
+            f"context: {context[-2000:]}\n"
             "Classify and extract fields for downstream responder."
         )
         data = llm_client.chat_json(

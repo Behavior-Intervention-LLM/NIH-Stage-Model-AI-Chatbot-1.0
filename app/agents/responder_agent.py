@@ -57,6 +57,16 @@ class ResponderAgent(BaseAgent):
             "piece would contain — write it. If a stage has been detected (see "
             "'Inferred stage' in the context), use it and refer to it in the piece."
         ),
+
+        "user_instruction_accepted_offer": (
+            "The user's message accepts an offer you made in your previous "
+            "reply (shown below). Fulfil that offer now, completely: produce "
+            "the deliverable or perform the task you offered. Do not restate "
+            "or re-justify their stage classification, and do not ask whether "
+            "they want it — they just said yes. If the offer listed several "
+            "numbered options and the user did not pick one, ask in one short "
+            "sentence which option they want, listing the options."
+        ),
     }
 
     # Keyed by canonical Roman identifier, sub-stages included, so "what is
@@ -230,7 +240,10 @@ class ResponderAgent(BaseAgent):
             "Full slots (reference):",
             json.dumps(state.slots.model_dump(), ensure_ascii=False, default=str)[:6000],
             "",
-            f"Recent conversation context:\n{(context or '')[:2000]}",
+            # Tail slice: the context string ends with the recent turns, and
+            # the previous assistant message's closing sentences (offers,
+            # follow-up questions) are what short user replies refer to.
+            f"Recent conversation context:\n{(context or '')[-3000:]}",
         ]
         return "\n".join(lines)
 
@@ -261,6 +274,7 @@ class ResponderAgent(BaseAgent):
 
         intent_payload = state.slots.extracted_features.get("intent_payload", {}) or {}
         intent_query_type = str(intent_payload.get("query_type", "")).lower()
+        accepted_offer = state.slots.extracted_features.get("accepted_offer")
 
         # Compose wins over definition: "write an essay explaining the NIH
         # stage model" is a deliverable request, not a request for the
@@ -278,7 +292,16 @@ class ResponderAgent(BaseAgent):
 
         max_tokens: int | None = None
         user_tail: str | None = None
-        if is_compose:
+        if accepted_offer:
+            # The user's message ("Yes please!", "2 please") accepted an offer
+            # from the previous reply. The deliverable is whatever was
+            # offered — never a restatement of the stage classification.
+            template = sections.get("user_instruction_accepted_offer") or self._FALLBACK_SECTIONS[
+                "user_instruction_accepted_offer"
+            ]
+            user_tail = f"{template}\n\nThe accepted offer:\n{accepted_offer}"
+            max_tokens = settings.LLM_COMPOSE_MAX_TOKENS
+        elif is_compose:
             user_tail = sections.get("user_instruction_compose") or self._FALLBACK_SECTIONS[
                 "user_instruction_compose"
             ]

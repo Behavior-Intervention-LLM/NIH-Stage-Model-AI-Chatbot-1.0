@@ -263,13 +263,25 @@ class MemoryManager:
         
         recent = self.get_short_term_memory(state)
         if recent:
+            # Long assistant answers are trimmed keeping head AND tail: the
+            # tail is where offers and follow-up questions live, and the
+            # downstream agents slice this context to a budget — with full
+            # messages, the closing "would you like me to write it?" fell
+            # outside every agent's window and a user's "Yes please!" was
+            # answered as a brand-new stage question.
             messages_text = "\n".join([
-                f"{msg.role.value}: {msg.content}" 
+                f"{msg.role.value}: {self._trim_middle(msg.content)}"
                 for msg in recent[-5:]
             ])
             context_parts.append(f"Recent Conversation:\n{messages_text}")
-        
+
         return "\n".join(context_parts)
+
+    @staticmethod
+    def _trim_middle(content: str, head: int = 180, tail: int = 300) -> str:
+        if len(content) <= head + tail + 20:
+            return content
+        return f"{content[:head]} […] {content[-tail:]}"
 
 # Singleton initialization
 memory_manager = MemoryManager()
