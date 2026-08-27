@@ -812,47 +812,20 @@ def render_about_section():
 
 
 def render_workflow_cards():
-    # st.markdown("### Guided Workflows")
-    # st.caption("Choose Auto for intent-driven routing, or pick one of the three specialized workflows.")
-
-    options = [
-        ("auto", "Auto", "Intent-driven routing", True),
-        ("mechanism_coach", "Mechanism Coach", "Mechanism ranking + validation", False),
-        ("study_builder", "Study Builder", "Stage-specific design matrix", False),
-        ("grant_partner", "Grant Partner", "Specific aims + reviewer critique", False),
-        ("measure_finder", "Measure Finder", "Construct-to-measure shortlist", False),
-    ]
-
-    cols = st.columns(len(options))
-    for col, (value, title, subtitle, enabled) in zip(cols, options):
-        with col:
-            is_active = st.session_state.selected_workflow == value
-            if enabled:
-                if st.button(title, key=f"workflow_{value}", use_container_width=True, type="primary" if is_active else "secondary"):
-                    st.session_state.selected_workflow = value
-                    st.rerun()
-                st.caption(subtitle)
-            else:
-                st.button(title, key=f"workflow_{value}", use_container_width=True, disabled=True)
-                st.caption(":material/construction: In development")
-
-    # Usage guidance sits with the workflow it describes instead of in a
-    # separate sidebar panel.
-    if st.session_state.selected_workflow == "auto":
-        with st.container(border=True):
-            st.markdown(
-                """
-                **How to use Auto:**
-                1. Type your question
-                2. The system detects intent/stage automatically
-                3. Review answer, reasoning, and references
-
-                **Example prompts:**
-                - "What is NIH Stage Model?"
-                - "Our study is a pilot feasibility trial. Which stage is it?"
-                - "What are Stage I requirements?"
-                """
-            )
+    # The Auto / Mechanism Coach / Study Builder / Grant Partner / Measure
+    # Finder toggle row is hidden: only Auto is implemented, the rest are
+    # permanently disabled placeholders, and selected_workflow already
+    # defaults to "auto" with nothing else able to change it now that the
+    # buttons are gone. The usage guidance stays, unconditionally.
+    with st.container(border=True):
+        st.markdown(
+            """
+            **Example prompts:**
+            - "What is NIH Stage Model?"
+            - "Our study is a pilot feasibility trial. Which stage is it?"
+            - "What are Stage I requirements?"
+            """
+        )
 
 
 with st.sidebar:
