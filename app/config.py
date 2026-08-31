@@ -69,12 +69,23 @@ class Settings(BaseSettings):
     VECTOR_DB_API_KEY: Optional[str] = os.getenv("VECTOR_DB_API_KEY")
 
     # Attached files (chat upload). These are conversation working context —
-    # never indexed into the vector store, never persisted, dropped with the
-    # session. One budget governs how much reaches the model, replacing four
-    # inconsistent caps (3500/file, 12000 merged, 15000 stored, 4500 sent)
+    # never indexed into the vector store, and scoped to the conversation that
+    # uploaded them. One budget governs how much reaches the model, replacing
+    # four inconsistent caps (3500/file, 12000 merged, 15000 stored, 4500 sent)
     # whose tightest limit was applied last and silently discarded most of a
     # multi-file upload.
-    ATTACHMENT_MAX_CHARS: int = int(os.getenv("ATTACHMENT_MAX_CHARS", "24000"))
+    #
+    # Sized to fit a whole grant document, because an attachment is the SUBJECT
+    # of the conversation ("rewrite my aims page"), not reference material to be
+    # sampled — a truncated draft is one the model has to invent the rest of.
+    # Measured over the 19 .docx files in data/documents/ (the genre users
+    # actually upload — specific aims, research plans, manuscripts): median
+    # 26,481 chars, max 84,319. The previous 24,000 cap therefore head-cut MORE
+    # THAN HALF of them, and the largest lost 72% of its text — the tail, where
+    # the later aims and Approach section live. 200k clears the observed max
+    # with ~2.4x headroom at roughly 50k tokens, well inside a modern model's
+    # context window. Revisit alongside LLM_MODEL if that ever tightens.
+    ATTACHMENT_MAX_CHARS: int = int(os.getenv("ATTACHMENT_MAX_CHARS", "200000"))
 
     # Retrieval loop (orchestrator: rag_plan → assess_evidence → retry?)
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))

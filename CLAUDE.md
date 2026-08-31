@@ -144,6 +144,20 @@ Both prompts warn against blending the two.
 - `memory.py`: short-term message buffer + rolling summary when over `SUMMARY_THRESHOLD`
 - `types.py`: all Pydantic models — `SessionState`, `StageSlots`, `ChatRequest`, `ChatResponse`, `AgentOutput`, `ToolCall`, `Citation`
 
+**Attachments** (files uploaded in chat) are conversation working context, never
+corpus material — the reference index is built separately and deliberately by
+`load_documents.py`. They are the *subject* of a turn ("rewrite my aims page"),
+so they go to the model whole rather than being sampled:
+`ATTACHMENT_MAX_CHARS` is sized to fit a full grant document (measured median
+26k / max 84k chars over `data/documents/`; the former 24k cap silently
+head-cut more than half of them). Because `state_store` is in-process only,
+`chat_history.py` persists attachment text per conversation
+(`save_attachments` / `load_attachments` / `clear_attachments`, ownership on
+the row) and `_load_state` rehydrates when the in-memory state is empty — so a
+restart mid-conversation cannot silently empty the document and leave the model
+composing from chat memory. `debug_trace` carries `attachments_restored` and
+`attachments_truncated` for monitoring.
+
 ### Prompts (`app/prompts/`)
 Markdown files loaded at agent init. `stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file; its stage definitions must stay in step with `app/core/stage_model.py`.
 

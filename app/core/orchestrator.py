@@ -1,11 +1,13 @@
 """Simplified implicit-intent orchestrator (LangGraph) for /chat only."""
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+import chat_history
 from app import feedback
 from app.agents.base import BaseAgent
 # from app.agents.grant_partner_agent import GrantPartnerAgent
@@ -28,6 +30,7 @@ from app.config import settings
 from app.core.types import AgentOutput, Citation, MessageRole, SessionState, ToolCall
 from app.tools.base import ToolRegistry
 
+logger = logging.getLogger(__name__)
 
 
 # Most important class
@@ -35,6 +38,8 @@ class ChatGraphState(TypedDict, total=False):
     session_id: str
     user_message: str
     workflow_override: Optional[str]
+    # Owner of the conversation, for attachment persistence/ownership checks.
+    username: str
     # Files attached to this turn: [{"name": ..., "text": ...}]
     attachments: List[Dict[str, str]]
     # Optional callable(str) that receives responder text incrementally.
@@ -229,12 +234,36 @@ class Orchestrator:
         # user message: prepending meant the document was re-sent to the intent
         # and stage classifiers on every later turn, and appeared twice in the
         # responder prompt.
+        #
+        # state_store is an in-process dict, so on a fresh process the state
+        # object starts empty even for a conversation that has files. Rehydrate
+        # from the database first: without this a restart between "here is my
+        # draft" and "rewrite my aims page" silently emptied the conversation
+        # and the model composed from chat memory instead of the document.
+        username = gstate.get("username") or "anonymous"
+        restored_now = 0
+        if not state.attachments:
+            try:
+                for stored in chat_history.load_attachments(username, session_id):
+                    if state.add_attachment(stored["name"], stored["text"]):
+                        restored_now += 1
+            except Exception:
+                logger.warning("Failed to restore attachments", exc_info=True)
+
         added_now = 0
         for item in incoming_attachments:
             if state.add_attachment(
                 str(item.get("name") or "attached document"), str(item.get("text") or "")
             ):
                 added_now += 1
+
+        # Persist only what this turn actually added. Attachment storage must
+        # never break the chat itself, same posture as history recording.
+        if added_now:
+            try:
+                chat_history.save_attachments(username, session_id, incoming_attachments)
+            except Exception:
+                logger.warning("Failed to persist attachments", exc_info=True)
 
         # Agents that route rather than answer get told an attachment exists,
         # not what is in it — enough for "summarise this" to classify
@@ -267,6 +296,17 @@ class Orchestrator:
                     {"name": a.name, "chars": a.chars} for a in state.attachments
                 ],
                 "attachments_added_this_turn": added_now,
+                # Restored from the database because the in-process state was
+                # empty — i.e. this turn survived a restart. Non-zero here is
+                # the signal that the old in-memory-only design would have
+                # silently dropped the document.
+                "attachments_restored": restored_now,
+                # Whether the prompt budget cut any of it. This is the number
+                # to watch after raising ATTACHMENT_MAX_CHARS: it should be 0.
+                "attachments_chars_total": sum(a.chars for a in state.attachments),
+                "attachments_truncated": (
+                    sum(a.chars for a in state.attachments) > settings.ATTACHMENT_MAX_CHARS
+                ),
                 "accepted_offer": accepted_offer,
             },
         }
@@ -822,6 +862,7 @@ class Orchestrator:
                 "session_id": session_id,
                 "user_message": user_message,
                 "workflow_override": workflow_override,
+                "username": username,
                 "attachments": incoming,
                 "stream_handler": stream_handler,
             }

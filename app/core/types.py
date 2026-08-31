@@ -243,9 +243,11 @@ class ChatRequest(BaseModel):
     message: str
     workflow: Optional[Literal["auto", "navigator", "mechanism_coach", "study_builder", "measure_finder", "grant_partner"]] = None # The intent is here, do we need intent agent
     # Pre-extracted text of a file the caller is attaching to the conversation.
-    # Working context only: never indexed into the vector store, never
-    # persisted, discarded with the session. The server does no file parsing —
-    # API callers extract text themselves; the chat UI does it client-side.
+    # Working context only: never indexed into the vector store, and scoped to
+    # this conversation — stored in chat_history.attachments purely so a
+    # restart cannot empty the conversation mid-thread, and deleted with it.
+    # The server does no file parsing — API callers extract text themselves;
+    # the chat UI does it client-side.
     document_text: Optional[str] = None
     document_name: Optional[str] = None
 

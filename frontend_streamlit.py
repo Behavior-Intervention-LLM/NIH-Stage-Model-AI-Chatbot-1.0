@@ -1052,7 +1052,8 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
     help=(
         "Attached files are working context for this conversation only. They are "
-        "never added to the reference corpus and are discarded when the session ends."
+        "never added to the reference corpus, and they are deleted with the "
+        "conversation or when you press Clear."
     ),
 )
 
@@ -1116,6 +1117,15 @@ if _attached_files or _bound:
     if cols[1].button("Clear", key="clear_attachments", help="Detach all files"):
         if _bound_state:
             _bound_state.clear_attachments()
+        # Also drop the stored copies. Clearing only the in-process state
+        # would let the orchestrator's restart-rehydration read them straight
+        # back out of the database on the next turn.
+        try:
+            chat_history.clear_attachments(
+                _history_username(), st.session_state.session_id
+            )
+        except Exception:
+            pass  # attachment storage is best-effort; never block the chat UI
         st.session_state._attachment_cache = {}
         st.rerun()
 
