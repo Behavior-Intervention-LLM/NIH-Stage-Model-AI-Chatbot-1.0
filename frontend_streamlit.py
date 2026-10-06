@@ -161,6 +161,14 @@ st.markdown(
       [data-testid="stCaptionContainer"] span[role="img"] {{
           color: {BID_TEAL};
       }}
+      /* A heavier outline on the chat prompt box so it reads as the place to
+         type; Streamlit's default 1px border is easy to miss. */
+      [data-testid="stChatInput"] > div {{
+          border: 2px solid {BID_TEAL} !important;
+      }}
+      [data-testid="stChatInput"] > div:focus-within {{
+          border-width: 3px !important;
+      }}
     """
     + _widget_icon_css("logout_btn", ICON_LOG_OUT, target="button")
     + _widget_icon_css("change_pw_expander", ICON_CHANGE_PASSWORD, target="summary")
