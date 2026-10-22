@@ -35,7 +35,7 @@ curl http://127.0.0.1:8000/health
 
 ### API
 - Backend: `http://localhost:8000`
-  - `POST /chat` — main endpoint. Returns `turn_uid`, which identifies the answer for rating.
+  - `POST /chat` — main endpoint for API callers (the Streamlit UI does not use it — see Frontend). Returns `turn_uid`, which identifies the answer for rating.
   - `POST /feedback/rating` — thumbs up/down (`rating`: `1`, `-1`, or `null` to withdraw) plus optional `comment`, keyed by `turn_uid`. Overwrites on repeat; owner-checked.
   - `GET /feedback/rating/{turn_uid}` — current rating for a turn the caller owns.
   - `GET /analytics/*` — admin-only (`ANALYTICS_ADMIN_USERS`), incl. `/analytics/ratings`.
@@ -44,18 +44,45 @@ curl http://127.0.0.1:8000/health
 
 ## Configuration
 
-All settings live in `app/config.py` (pydantic-settings, loaded from environment):
+All settings live in `app/config.py` (pydantic-settings, loaded from environment).
+
+LLM: `LLM_PROVIDER` defaults to `openai` (`LLM_MODEL=gpt-5.5`), with the
+cheap non-reasoning `LLM_INTENT_MODEL` (`gpt-4.1-mini`) for intent
+classification and RAG query reformulation. The `model=` override is honoured
+only by the OpenAI provider, and so is true token streaming — the others
+return the reply as one chunk. `app/core/llm.py` still has Ollama / Anthropic
+/ Groq branches, but their settings (`OLLAMA_BASE_URL`, `ANTHROPIC_*`,
+`GROQ_*`) are commented out in `config.py`, so selecting those providers
+fails until they are restored.
+
+Retrieval knobs: `RAG_TOP_K` (5), `RAG_MAX_ATTEMPTS` (2), `RAG_MIN_RELEVANCE`
+(0.10 raw TF-IDF cosine), `RAG_MIN_COVERAGE` (0.25 query-term coverage),
+`RAG_LLM_REFORMULATION`. Output caps: `LLM_MAX_TOKENS` (2000),
+`LLM_COMPOSE_MAX_TOKENS` (4000).
 
 ## Architecture
 
 ### Overview
-Single `POST /chat` endpoint → LangGraph orchestrator → multi-agent pipeline → response. State is in-memory (lost on restart). The default LLM is local Ollama.
+Two entry points into one `Orchestrator.process_message()`: the Streamlit UI
+calls it in-process, API callers go through `POST /chat`. Either way:
+guardrails → LangGraph orchestrator → multi-agent pipeline → response.
+Session state is in-memory (lost on restart); chat history and attachments
+are persisted via `chat_history.py`.
+
+Guardrails (`app/core/guardrails.py`) run before the graph, in whichever
+entry point is used: length/XSS validation, then a keyword topic pre-filter
+that is **default-allow** — it blocks only clear off-topic keywords with no
+domain keyword. The actual off-topic refusal is rule 0 of `responder.md`.
+`sanitize_response` caps replies at 24k chars.
 
 ### Request/Response
 ```
-ChatRequest  { session_id, message }
-ChatResponse { reply, session_id, debug_trace? }
+ChatRequest  { session_id, message, workflow?, document_text?, document_name? }
+ChatResponse { session_id, reply, debug, citations, next_question?, turn_uid? }
 ```
+`process_message()` also takes `attachments=[{name, text}]` (used by the UI)
+and a `stream_handler` callable; `POST /chat` exposes only the single
+`document_text` blob and does not stream.
 
 ### LangGraph Orchestration (`app/core/orchestrator.py`)
 
@@ -76,6 +103,22 @@ load_state → intent → [route by intent]
 - Compose queries (`query_type: "compose"`, detected by `is_compose_query()` in `stage_model.py` — "write an essay/summary/report…") are generation tasks: they never re-run stage classification, and the responder gets a task instruction (`user_instruction_compose` in `responder.md`) to produce the full deliverable using the already-committed `slots.stage`, with the larger `LLM_COMPOSE_MAX_TOKENS` output cap.
 - After `assess_evidence`: if the retrieved passages clear neither relevance floor and the attempt budget (`RAG_MAX_ATTEMPTS`, default 2) is not spent, loop back to `rag_plan`, which reformulates the query — via the cheap LLM, falling back to a deterministic keyword rewrite. Otherwise continue to `responder`.
 - Low stage confidence (< 0.75) sets `stage_uncertain_hint`; the responder decides tone and follow-ups. There is no separate clarify gate.
+- Accepted offers: `_finalize` stores the offer at the tail of a reply ("Would you like me to…") as `pending_offer` for one turn. If the next message is a bare acceptance ("Yes please!", "2 please"), `_load_state` turns it into `accepted_offer` and `_intent` skips the intent LLM, routing it as `compose` (`app/core/followup.py`).
+
+**What each agent sees:** routing agents get `context` from
+`memory_manager.get_context_for_agent()` (summary, slots, last 5 messages
+trimmed to head/tail, plus attachment *names* only). `IntentAgent` uses the
+tail 2000 chars, `StageAgent` the head 1200, and the responder the tail 3000
+— plus the full attachment text, retrieval evidence and a slots dump, built
+in `ResponderAgent._build_general_context`. The rolling summary is created
+once, when the session reaches `SUMMARY_THRESHOLD` messages; it is a
+truncation of messages, not an LLM summary, and is not refreshed afterwards.
+
+**Retrieval:** attempt 1 searches the user's message, with
+`" NIH Stage {slots.stage}"` appended when a stage is committed. A passage is
+usable only if its raw semantic score ≥ `RAG_MIN_RELEVANCE` **and** its term
+coverage ≥ `RAG_MIN_COVERAGE`. Turns with attachments never retry. Retrieval
+is skipped only for `chit_chat` / `admin` / `debug` intents.
 
 **Per-turn state:** `_load_state` clears the per-turn stage clarification
 fields (`missing_info`, `clarifying_question`, `stage_uncertain_hint`) so a
@@ -93,7 +136,12 @@ that do not support the answer.
 Agents commented out of the graph (`PlannerAgent`, `MechanismCoachAgent`,
 `StudyBuilderAgent`, `MeasureFinderAgent`, `GrantPartnerAgent`) still exist in
 `app/agents/` but are not wired in. `ChatRequest.workflow` is accepted by the
-API and currently ignored by the graph.
+API and currently ignored by the graph (only logged as `workflow_override`).
+
+After the graph returns, `process_message()` calls `feedback.observe_turn()`,
+which mints the `turn_uid` and records implicit-feedback telemetry on a
+background thread. Learned per-source weights from that loop feed back into
+`VersionedRAGTool` ranking (`FEEDBACK_ADAPTIVE_RETRIEVAL`).
 
 ### Agent Layer (`app/agents/`)
 Each agent wraps an LLM call with a markdown prompt template from `app/prompts/`:
@@ -159,10 +207,22 @@ composing from chat memory. `debug_trace` carries `attachments_restored` and
 `attachments_truncated` for monitoring.
 
 ### Prompts (`app/prompts/`)
-Markdown files loaded at agent init. `stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file; its stage definitions must stay in step with `app/core/stage_model.py`.
+Markdown files read at call time. Only three are live: `stage.md`
+(`StageAgent` system prompt), `responder.md` (split on `## section` headings;
+each section overrides the matching `_FALLBACK_SECTIONS` entry in
+`responder_agent.py`), and `judge.md` (feedback judge). `IntentAgent` and the
+RAG reformulation prompt are inline strings in code — editing `intent.md`
+changes nothing; `planner.md` and `grant.md` belong to unwired agents.
+`stage.md` contains the full NIH Stage 0–V decision tree and is the most domain-critical file; its stage definitions, and the ones inlined in `responder.md`, must stay in step with `app/core/stage_model.py`.
 
 ### Frontend (`frontend_streamlit.py`)
-Streamlit chat UI; calls `POST /chat` on the backend. Branding comes from
+Streamlit chat UI. It does **not** call `POST /chat`: it imports the
+orchestrator and runs `process_message()` in-process (cached with
+`st.cache_resource`) on a worker thread, streaming responder tokens back
+through a queue into `st.write_stream`. It runs its own copy of the
+guardrail checks and parses uploaded PDF/DOCX/TXT files client-side,
+caching the result per (name, size). Changes to `app/main.py`'s `/chat`
+handler therefore do not affect the UI. Branding comes from
 `visuals/web/` — `st.logo()` puts the BID lockup top-left (the square badge
 when the sidebar is collapsed) as the app's only brand mark, the badge is also
 the favicon, and PNG icons
