@@ -3,6 +3,7 @@ Application settings loaded from environment variables.
 """
 import os
 from typing import Optional
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
@@ -63,6 +64,10 @@ class Settings(BaseSettings):
     # Vector store (local TF-IDF)
     VECTOR_STORE_PATH: str = os.getenv("VECTOR_STORE_PATH", "data/vector_store")
     DOCUMENTS_DIR: str = os.getenv("DOCUMENTS_DIR", "data/documents")
+
+    # Deliberately separate from research papers and private chat attachments.
+    APPLICANT_GUIDE_PATH: str = str(Path(__file__).resolve().parents[1] / "how-to-apply-applicant-guide.pdf")
+    APPLICANT_GUIDE_INDEX_PATH: str = str(Path(__file__).resolve().parents[1] / "data/applicant_guide_index")
 
     # External vector DB (optional)
     VECTOR_DB_URL: Optional[str] = os.getenv("VECTOR_DB_URL")

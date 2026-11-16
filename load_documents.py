@@ -10,9 +10,11 @@ The index it left behind held 641 chunks covering only 186 unique passages.
 Usage:
     python load_documents.py            # rebuild the index from scratch
     python load_documents.py --append   # add only documents not yet indexed
+    python load_documents.py --guide-only  # prepare/update only the applicant guide
 """
 import sys
 import os
+import argparse
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,12 +22,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.config import settings
 from app.tools.document_loader import DocumentLoader
 from app.tools.vector_store import SimpleVectorStore
+from app.tools.applicant_guide import ensure_guide_index
 
 SUPPORTED = (".pdf", ".doc", ".docx")
 
 
 def main() -> int:
-    append = "--append" in sys.argv
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--append", action="store_true")
+    parser.add_argument("--guide-only", action="store_true", help="Prepare only the applicant guide index")
+    args = parser.parse_args()
+    append = args.append
+
+    # The same idempotent operation runs automatically on application requests.
+    # Eager ingestion here avoids first-request PDF extraction latency.
+    try:
+        guide_path = ensure_guide_index(settings.APPLICANT_GUIDE_PATH, settings.APPLICANT_GUIDE_INDEX_PATH)
+        print(f"Applicant guide index: {guide_path}")
+    except Exception as exc:
+        print(f"Applicant guide ingestion failed: {exc}")
+        return 1
+    if args.guide_only:
+        return 0
 
     docs_dir = Path(settings.DOCUMENTS_DIR)
     docs_dir.mkdir(parents=True, exist_ok=True)

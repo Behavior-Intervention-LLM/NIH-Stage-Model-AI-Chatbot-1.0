@@ -1,5 +1,43 @@
 # NIH Stage Model AI Chatbot (Current Architecture)
 
+## Application Partner and applicant guide
+
+Application questions in Auto chat now use `GrantPartnerAgent` and
+`app/prompts/grant.md`. API callers can explicitly select
+`"workflow": "grant_partner"`. Both the Streamlit UI and API use this path;
+the UI keeps streaming. Try: “Review my R01 Specific Aims against the applicant
+guide” and attach the draft and relevant NOFO.
+
+`how-to-apply-applicant-guide.pdf` is indexed automatically on the first
+application request, separately from research papers and private chat uploads.
+Subsequent requests reuse the index; replacing the PDF creates a new generation
+based on its SHA-256 hash. Extraction preserves PDF page numbers, G.xxx sections,
+FORMS version, and release date. A failed or missing PDF returns a tool error
+and no guide evidence instead of silently using the previous edition.
+
+To prepare the guide before serving requests, avoiding first-use extraction:
+
+```bash
+python load_documents.py --guide-only
+```
+
+The normal ingestion commands also prepare the guide before the research
+corpus. Configure `APPLICANT_GUIDE_PATH` for another reference PDF and
+`APPLICANT_GUIDE_INDEX_PATH` for another writable cache directory. Defaults
+resolve from the repository root. Generated `data/applicant_guide_index/` files
+are ignored by Git and Docker; Docker includes the source PDF. Old generations
+remain on disk but are not searched after the PDF changes.
+
+The partner receives full usable passages, cites requirements by section/page,
+and distinguishes requirements from writing suggestions. Recognized activity
+codes narrow program-specific retrieval; unknown or ambiguous codes retain all
+programs. This is a retrieval hint, not an eligibility check. The supplied guide
+is a local snapshot (FORMS I, released December 2025), not a live policy feed.
+NOFO instructions take precedence; linked tables and later notices require
+verification. No websites are crawled and no applications are submitted.
+
+Run offline regression checks with `python -m unittest discover -s tests -v`.
+
 This project is a **single-endpoint, intent-driven, multi-agent NIH Stage assistant** with four guided workflows.
 It uses FastAPI + LangGraph orchestration + local RAG tools + Streamlit frontend.
 

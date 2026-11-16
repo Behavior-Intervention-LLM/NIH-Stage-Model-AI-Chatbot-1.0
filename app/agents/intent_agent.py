@@ -26,7 +26,9 @@ class IntentAgent(BaseAgent):
 
     @staticmethod
     def _infer_workflow_from_text(message_lower: str) -> str:
-        if any(k in message_lower for k in ["grant", "specific aims", "aim 1", "aim 2", "reviewer", "revision plan"]):
+        if any(k in message_lower for k in ["grant", "specific aims", "aim 1", "aim 2", "reviewer", "revision plan",
+                                            "applicant guide", "application guide", "application partner",
+                                            "nofo", "sf424", "research strategy", "era commons", "forms-i"]):
             return "grant_partner"
         if any(k in message_lower for k in ["measure", "scale", "instrument", "psychometric", "questionnaire"]):
             return "measure_finder"
@@ -72,6 +74,8 @@ class IntentAgent(BaseAgent):
             "You are an intent and information extraction agent. Output JSON only.\n"
             "Fields:\n"
             "- workflow (navigator/mechanism_coach/study_builder/measure_finder/grant_partner)\n"
+            "  grant_partner includes NIH/PHS applications, forms, budgets, NOFOs, registration, and submission.\n"
+            "  Administrative application questions do not need stage classification.\n"
             "- need_stage (bool)\n"
             "- intent_label (stage_guidance/general_qa/chit_chat/admin/debug/unknown)\n"
             "- query_type (definition/stage_classification/stage_requirements/next_step/compose/general_qa/chit_chat/admin)\n"

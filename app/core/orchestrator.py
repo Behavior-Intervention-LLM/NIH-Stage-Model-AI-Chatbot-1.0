@@ -10,7 +10,7 @@ from langgraph.graph import END, START, StateGraph
 import chat_history
 from app import feedback
 from app.agents.base import BaseAgent
-# from app.agents.grant_partner_agent import GrantPartnerAgent
+from app.agents.grant_partner_agent import GrantPartnerAgent
 from app.agents.intent_agent import IntentAgent
 # from app.agents.mechanism_coach_agent import MechanismCoachAgent
 # from app.agents.measure_finder_agent import MeasureFinderAgent
@@ -29,6 +29,7 @@ from app.core.state_store import state_store
 from app.config import settings
 from app.core.types import AgentOutput, Citation, MessageRole, SessionState, ToolCall
 from app.tools.base import ToolRegistry
+from app.tools.applicant_guide import ApplicantGuideTool, TOOL_NAME as GUIDE_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +93,12 @@ class Orchestrator:
             # "mechanism_coach_agent": MechanismCoachAgent(),
             # "study_builder_agent": StudyBuilderAgent(),
             # "measure_finder_agent": MeasureFinderAgent(),
-            # "grant_partner_agent": GrantPartnerAgent(),
+            "grant_partner_agent": GrantPartnerAgent(),
             "responder_agent": ResponderAgent(),
         }
         self.tool_registry = tool_registry or ToolRegistry()
+        if GUIDE_TOOL_NAME not in self.tool_registry.list_tools():
+            self.tool_registry.register(ApplicantGuideTool())
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -355,6 +358,16 @@ class Orchestrator:
                     decision["query_type"] = "general_qa"
                 gstate["debug_info"]["short_ack_stage_guard"] = True
 
+        # Application tasks use the guide even in Auto mode. An explicit API
+        # override also works without needing a particular phrase in the turn.
+        if (gstate.get("workflow_override") == "grant_partner"
+                or IntentAgent._infer_workflow_from_text(user_message.lower()) == "grant_partner"):
+            decision["workflow"] = "grant_partner"
+            decision["intent_label"] = "general_qa"
+        if decision.get("workflow") == "grant_partner":
+            # Administrative requirements must not trigger stage classification.
+            if "stage" not in user_message.lower() or decision.get("query_type") == "compose":
+                decision["need_stage"] = False
         self.agents["intent_agent"].update_state(state, out)
         self._add_agent(gstate, "intent_agent", out)
 
@@ -573,6 +586,8 @@ class Orchestrator:
         for tool_call in pending:
             try:
                 artifact = self.tool_registry.run_tool(tool_call.tool_name, tool_call.tool_args)
+                if not artifact.metadata.get("success", True):
+                    tool_errors += 1
                 state.artifacts.append(artifact)
                 count += 1
                 citations.extend(artifact.citations)
@@ -753,13 +768,15 @@ class Orchestrator:
             state.slots.extracted_features.pop("stage_uncertain_hint", None)
 
         stream_handler = gstate.get("stream_handler")
-        responder = self.agents["responder_agent"]
+        responder_name = ("grant_partner_agent" if gstate.get("intent_workflow") == "grant_partner"
+                          else "responder_agent")
+        responder = self.agents[responder_name]
         if stream_handler is not None and hasattr(responder, "run_stream"):
             out = responder.run_stream(state, user_message, context, stream_handler)
         else:
             out = responder.run(state, user_message, context)
         responder.update_state(state, out)
-        self._add_agent(gstate, "responder_agent", out)
+        self._add_agent(gstate, responder_name, out)
 
         # Legacy four-workflow reply assembly (needs json and workflow_structured_output; off in simplified pipeline).
         # workflow = state.slots.extracted_features.get("workflow", "navigator")

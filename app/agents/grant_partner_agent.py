@@ -1,64 +1,54 @@
-"""
-Grant Partner Agent: specific aims skeleton + mock reviewer critique + revision plan.
-"""
-from __future__ import annotations
+"""Application partner using the shared responder's streaming/LLM execution."""
+from pathlib import Path
 
-from app.agents.base import BaseAgent
+from app.agents.rag_agent import RAGAgent
+from app.agents.responder_agent import ResponderAgent
+from app.config import settings
+from app.core.stage_model import stage_overview
 from app.core.types import AgentOutput, SessionState
 
 
-class GrantPartnerAgent(BaseAgent):
+class GrantPartnerAgent(ResponderAgent):
     def __init__(self):
-        super().__init__("GrantPartnerAgent")
+        super().__init__()
+        self.name = "GrantPartnerAgent"
+        self._grant_prompt_file = Path(__file__).resolve().parents[1] / "prompts" / "grant.md"
 
-    def run(self, state: SessionState, user_message: str, context: str = "") -> AgentOutput:
-        stage = state.slots.stage or "I"
-        mechanism_hint = "self-efficacy" if "adherence" in user_message.lower() else "target mechanism"
+    @staticmethod
+    def _collect_evidence(state):
+        # Send full usable passages: the general responder's 500-character
+        # artifact excerpt is too short for conditional application requirements.
+        citations = []
+        seen = set()
+        for artifact in state.artifacts:
+            for citation in artifact.citations:
+                key = (citation.source, citation.metadata.get("page"), citation.passage)
+                if RAGAgent.is_usable(citation) and key not in seen:
+                    seen.add(key)
+                    citations.append(citation)
+        lines = []
+        for c in citations:
+            m = c.metadata
+            lines.append(
+                f"[{c.source}, PDF p. {m.get('page', '?')}, {m.get('section', '')}; "
+                f"FORMS {m.get('forms_version', '?')}, released {m.get('released', '?')}]\n"
+                f"{c.passage}"
+            )
+        return lines, list(dict.fromkeys(c.source for c in citations)), citations
 
-        structured_output = {
-            "stage_anchor": f"Stage {stage}",
-            "specific_aims_skeleton": [
-                {
-                    "aim": "Aim 1",
-                    "text": f"Test whether the intervention improves the target behavior in a Stage {stage}-appropriate design.",
-                },
-                {
-                    "aim": "Aim 2",
-                    "text": f"Evaluate whether {mechanism_hint} changes in the expected direction and plausibly mediates the behavioral outcome.",
-                },
-            ],
-            "mock_reviewer_critique": {
-                "significance": "Strong if the target behavior is clinically meaningful and population burden is clearly stated.",
-                "innovation": "Moderate; strengthen novelty by clarifying what is new in mechanism targeting or delivery approach.",
-                "approach": "Needs tighter alignment between stage, design choice, comparator, and mechanism measurement.",
-                "stage_fit": f"Current plan appears most consistent with Stage {stage}.",
-                "mechanism_test_quality": "Adequate only if timing and construct measures are prespecified.",
-                "scalability_fidelity": "Address implementation feasibility and fidelity monitoring earlier.",
-            },
-            "revision_plan_top5": [
-                "Clarify the stage-specific research question and justify why this stage is appropriate.",
-                "Specify the primary comparator and what decision it supports.",
-                "Tighten the mechanism measurement schedule and mediation logic.",
-                "Add a concise fidelity monitoring plan tied to intervention delivery.",
-                "State explicit decision rules for progression to the next NIH stage.",
-            ],
-            "before_after_aim_language": {
-                "before": "We will test whether our intervention works.",
-                "after": f"We will conduct a Stage {stage}-appropriate study to test whether the intervention improves the target behavior and whether mechanism change supports progression to the next stage.",
-            },
-        }
+    def _build_llm_prompts(self, state, user_message, context=""):
+        lines, sources, citations = self._collect_evidence(state)
+        system_prompt = self._grant_prompt_file.read_text(encoding="utf-8")
+        system_prompt += "\n\nCanonical NIH Stage Model (not application activity codes):\n" + stage_overview()
+        user_prompt = self._build_general_context(state, user_message, context, lines, sources)
+        accepted_offer = state.slots.extracted_features.get("accepted_offer")
+        if accepted_offer:
+            user_prompt += f"\nThe user accepted this task; complete it: {accepted_offer}"
+        return system_prompt, user_prompt, citations, settings.LLM_COMPOSE_MAX_TOKENS
 
+    def _run_with_rules(self, state: SessionState, user_message: str) -> AgentOutput:
         return AgentOutput(
-            decision={
-                "workflow": "grant_partner",
-                "structured_output": structured_output,
-                "summary": "Generated a stage-aligned Specific Aims skeleton, reviewer-aware critique, and revision plan.",
-            },
-            confidence=0.83,
-            analysis="Grant partner structured output generated",
+            decision={}, confidence=0.0,
+            analysis="Application partner requires a configured language model",
+            user_facing="The application partner needs a configured language model to draft or review your application. Please check the LLM configuration.",
         )
-
-    def update_state(self, state: SessionState, output: AgentOutput):
-        state.slots.extracted_features["workflow"] = "grant_partner"
-        state.slots.extracted_features["workflow_structured_output"] = output.decision.get("structured_output", {})
-        state.slots.extracted_features["workflow_summary"] = output.decision.get("summary", "")

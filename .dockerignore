@@ -31,6 +31,7 @@ docker-compose*.yml
 
 # Local runtime data (mounted as volumes at runtime instead)
 local_storage/
+data/applicant_guide_index/
 
 # Reference / dev-only content
 notebook/

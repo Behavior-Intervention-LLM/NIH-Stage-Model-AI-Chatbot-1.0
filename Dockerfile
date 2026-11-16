@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY auth.py .
 COPY data/ ./data/
+COPY how-to-apply-applicant-guide.pdf ./how-to-apply-applicant-guide.pdf
 
 RUN mkdir -p data/documents data/vector_store local_storage
 

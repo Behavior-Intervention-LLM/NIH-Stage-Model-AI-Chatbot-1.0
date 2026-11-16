@@ -71,3 +71,6 @@ notebook/
 TODO.md
 # Derived TF-IDF matrix cache (rebuilt automatically from chunks.json)
 data/vector_store/vectors.npy
+
+# Automatically generated applicant-guide index generations
+data/applicant_guide_index/

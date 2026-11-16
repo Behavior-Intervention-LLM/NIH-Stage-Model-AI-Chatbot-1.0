@@ -51,7 +51,7 @@ class RAGAgent(BaseAgent):
         # matched against the NIH reference documents.
         query = user_message.strip()
         stage = state.slots.stage
-        if stage:
+        if stage and state.slots.extracted_features.get("workflow") != "grant_partner":
             query += f" NIH Stage {stage}"
         return query
 
@@ -243,6 +243,8 @@ class RAGAgent(BaseAgent):
             )
 
         previous_queries = list(previous_queries or [])
+        if state.slots.extracted_features.get("workflow") == "grant_partner":
+            user_message = state.slots.extracted_features.get("accepted_offer") or user_message
         question = user_message.strip()
         top_k = settings.RAG_TOP_K
 
@@ -284,7 +286,9 @@ class RAGAgent(BaseAgent):
             ),
             actions=[
                 ToolCall(
-                    tool_name=self._RETRIEVAL_TOOL,
+                    tool_name=("applicant_guide_tool"
+                               if state.slots.extracted_features.get("workflow") == "grant_partner"
+                               else self._RETRIEVAL_TOOL),
                     tool_args={"query": q, "top_k": top_k},
                     success_criteria=f"passage with similarity >= {settings.RAG_MIN_RELEVANCE}",
                 )
